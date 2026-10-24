@@ -1,0 +1,743 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <title>I've Already</title>
+    <link rel="stylesheet" href="styles/app.css">
+    <!-- Warm up the connection to TMDB's image CDN on startup, before any
+         detail page fires off a dozen image requests at once (poster +
+         season poster + cast photos + provider logos). Without this, the
+         first title opened each session pays for DNS + TLS handshake on
+         every one of those requests simultaneously. -->
+    <link rel="preconnect" href="https://image.tmdb.org">
+    <link rel="dns-prefetch" href="https://image.tmdb.org">
+</head>
+<body>
+    <div id="appSplash" class="app-splash"><div class="loading-spinner"></div><p class="loading-text">Loading…</p></div>
+    <div class="titlebar">
+        <div class="win-controls">
+            <button id="winMinimize" class="win-btn" title="Minimize">&#8211;</button>
+            <button id="winMaximize" class="win-btn" title="Maximize">&#9633;</button>
+            <button id="winClose" class="win-btn win-close" title="Close">&#10005;</button>
+        </div>
+    </div>
+
+    <header id="appHeader">
+        <div class="logo">I've Already</div>
+        <div class="nav-center">
+            <div class="nav-search" id="navSearch">
+                <button type="button" id="searchToggleBtn" class="search-toggle-btn" title="Search">
+                    <svg viewBox="0 0 24 24" width="20" height="20" fill="none" stroke="currentColor" stroke-width="2"><circle cx="11" cy="11" r="7"/><line x1="21" y1="21" x2="16.65" y2="16.65"/></svg>
+                </button>
+                <input id="searchInput" type="text" placeholder="Search what you've already…">
+                <div id="searchResultsDropdown" class="search-results-dropdown hidden"></div>
+            </div>
+            <nav>
+                <button class="nav-btn active" data-section="home">Home</button>
+                <button class="nav-btn" data-section="played">Play</button>
+                <button class="nav-btn" data-section="read">Read</button>
+                <button class="nav-btn" data-section="watched">Watch</button>
+                <button class="nav-btn" data-section="lists">Lists</button>
+            </nav>
+        </div>
+        <div class="header-right">
+            <button type="button" id="notifBellBtn" class="notif-bell" title="Notifications">
+                <svg viewBox="0 0 24 24" width="22" height="22" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M18 8a6 6 0 0 0-12 0c0 7-3 9-3 9h18s-3-2-3-9"/><path d="M13.7 21a2 2 0 0 1-3.4 0"/></svg>
+                <span id="notifBadge" class="notif-badge hidden"></span>
+            </button>
+            <div class="account-menu" id="accountMenu">
+                <button id="accountAvatarBtn" class="account-avatar-btn" title="Account">
+                    <span id="accountAvatarInitial"></span>
+                </button>
+                <div id="accountDropdown" class="account-dropdown hidden">
+                    <button type="button" id="accountDropdownProfile" class="account-dropdown-item">View Profile</button>
+                    <button type="button" id="accountDropdownAccount" class="account-dropdown-item">Account</button>
+                    <button type="button" id="accountDropdownSwitch" class="account-dropdown-item hidden">Switch Profile</button>
+                    <div class="account-dropdown-divider"></div>
+                    <button type="button" id="accountDropdownLogout" class="account-dropdown-item account-dropdown-item--danger">Log Out</button>
+                </div>
+            </div>
+        </div>
+    </header>
+
+    <aside id="notifPanel" class="notif-panel hidden">
+        <div class="notif-head"><h2>Notifications</h2><button type="button" id="notifClose" class="notif-close" title="Close">&times;</button></div>
+        <div class="notif-tools"><div id="notifFilter"></div><button type="button" id="notifMarkAll" class="notif-markall">Mark all as read</button></div>
+        <div id="notifBody" class="notif-body"></div>
+    </aside>
+
+    <section id="authPage" class="hidden">
+        <div class="auth-card">
+            <h1 class="auth-logo">I've Already</h1>
+            <div class="auth-tabs">
+                <button class="auth-tab active" data-mode="signin">Log In</button>
+                <button class="auth-tab" data-mode="signup">Sign Up</button>
+            </div>
+            <form id="authForm">
+                <input type="email" id="authEmail" placeholder="Email" required autocomplete="email">
+                <input type="password" id="authPassword" placeholder="Password" required autocomplete="current-password" minlength="6">
+                <button type="submit" id="authSubmitBtn" class="save-btn auth-submit">Log In</button>
+            </form>
+            <p id="authError" class="auth-error hidden"></p>
+            <p id="authNotice" class="auth-notice hidden"></p>
+            <button type="button" id="pickerBackBtn" class="picker-back-btn hidden"><svg class="back-btn-icon" viewBox="0 0 24 24" width="16" height="16" fill="none" stroke="currentColor" stroke-width="2.6" stroke-linecap="round" stroke-linejoin="round"><polyline points="15 18 9 12 15 6"/></svg> Back to profiles</button>
+        </div>
+    </section>
+
+    <section id="profilePickerPage" class="hidden">
+        <div class="picker-card">
+            <h1 class="picker-title">Who's watching?</h1>
+            <div id="pickerGrid" class="picker-grid"></div>
+            <p id="pickerError" class="auth-error hidden"></p>
+        </div>
+    </section>
+
+    <main id="appMain" class="hidden">
+        <section id="catalogPage">
+            <div id="catalogLoading" class="loading-state hidden"><div class="loading-spinner"></div><p class="loading-text">Loading…</p></div>
+            <p id="sectionNotice" class="empty-state hidden"></p>
+
+            <div id="listsView" class="hidden">
+                <div class="lists-page-tabs">
+                    <button type="button" class="lists-page-tab active" id="listsTabMine">Your Lists</button>
+                    <button type="button" class="lists-page-tab" id="listsTabShared">Shared With You</button>
+                    <button type="button" class="lists-page-tab" id="listsTabOfficial">Official Lists</button>
+                </div>
+                <div class="poster-row-header-controls lists-page-controls">
+                    <div id="listsShowFilter"></div>
+                    <div class="sort-control-group">
+                        <div id="listsSortSelect"></div>
+                        <button type="button" id="listsSortDir" class="sort-direction-btn" title="Descending (click for ascending)">
+                            <svg viewBox="0 0 24 24" width="16" height="16"><path d="M12 4v16M12 20l-5-5M12 20l5-5" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"/></svg>
+                        </button>
+                    </div>
+                    <button type="button" id="listsNewBtn" class="save-btn" style="margin:0;">+ New List</button>
+                </div>
+                <div id="listsGrid" class="lists-grid"></div>
+            </div>
+
+            <div id="listDetailView" class="hidden">
+                <button id="listDetailBackBtn" class="back-btn"><svg class="back-btn-icon" viewBox="0 0 24 24" width="16" height="16" fill="none" stroke="currentColor" stroke-width="2.6" stroke-linecap="round" stroke-linejoin="round"><polyline points="15 18 9 12 15 6"/></svg> Back to Lists</button>
+                <div id="listDetailLoading" class="loading-state hidden"><div class="loading-spinner"></div><p class="loading-text">Loading…</p></div>
+                <div id="listDetailHero" class="hero-banner list-detail-hero hidden"></div>
+
+                <div class="list-detail-header">
+                    <div class="list-detail-heading">
+                        <div class="list-hero-owner-row">
+                            <div id="listDetailOwnerAvatar" class="list-hero-avatar"></div>
+                            <span class="list-hero-owner-text">List by <strong id="listDetailOwnerName"></strong></span>
+                            <span id="listDetailOfficialBadge" class="list-hq-badge hidden">HQ</span>
+                            <span id="listDetailUpdated" class="list-hero-updated"></span>
+                        </div>
+                        <h1 id="listDetailName"></h1>
+                        <p id="listDetailMeta" class="list-detail-meta"></p>
+                    </div>
+                </div>
+
+                <!-- Never shown: the edit toolbar's Delete button triggers this. -->
+                <button type="button" id="listDetailDeleteBtn" style="display:none" aria-hidden="true" tabindex="-1">Delete List</button>
+
+                <div id="listDetailEditForm" class="list-edit-form hidden">
+                    <div class="list-edit-columns">
+                        <div class="list-edit-col-left">
+                            <label class="profile-edit-field-label" for="listEditNameInput" style="margin-top:0;">Name</label>
+                            <input type="text" id="listEditNameInput" class="profile-edit-field-input" maxlength="80">
+
+                            <label class="profile-edit-field-label" for="listEditGenreInput">Genres</label>
+                            <div id="listEditGenreTags" class="list-genre-tags"></div>
+                            <input type="text" id="listEditGenreInput" class="profile-edit-field-input" placeholder="Type a genre and press Enter">
+
+                            <label class="profile-edit-field-label">Who can view</label>
+                            <div id="listEditVisibility"></div>
+
+                            <label class="list-ranked-row">
+                                <span class="list-ranked-main"><input type="checkbox" id="listEditRankedInput"> Ranked list</span>
+                                <span class="list-ranked-hint">Show position for each title.</span>
+                            </label>
+                        </div>
+                        <div class="list-edit-col-right">
+                            <div class="list-edit-desc-box">
+                                <label class="profile-edit-field-label" for="listEditDescInput" style="margin-top:0;">Description</label>
+                                <textarea id="listEditDescInput" class="profile-bio-input list-edit-desc-input" maxlength="300" placeholder="What's this list about?"></textarea>
+                            </div>
+                            <!-- Cancel/Save now live only in the item-management toolbar below
+                                 (View list / Save) — these two stay in the DOM so that toolbar's
+                                 buttons can trigger the same save/cancel logic, but aren't shown. -->
+                            <div class="list-edit-actions-right hidden">
+                                <button type="button" id="listEditCancelBtn" class="profile-edit-cancel-btn">Cancel</button>
+                                <button type="button" id="listEditSaveBtn" class="save-btn">Save</button>
+                            </div>
+                        </div>
+                    </div>
+                </div>
+
+                <div id="listDetailShareForm" class="account-inline-form hidden">
+                    <p class="profile-edit-field-label" style="margin-top:0;">Share with family members</p>
+                    <div id="listShareMembers"></div>
+                </div>
+
+                <div id="listDetailAddForm" class="list-manage-toolbar">
+                    <div class="list-add-input-row">
+                        <button type="button" id="listAddBtn" class="list-add-inline-btn">Add</button>
+                        <input type="text" id="listAddSearchInput" class="list-add-inline-input" placeholder="Find by name…" autocomplete="off">
+                        <button type="button" id="listImportBtn" class="list-add-import-btn" title="Import from Letterboxd, Steam…">Import</button>
+                    </div>
+                    <div class="list-manage-toolbar-right">
+                        <button type="button" id="listViewToggleBtn" class="sort-direction-btn" title="Switch to grid view">
+                            <svg viewBox="0 0 24 24" width="16" height="16" fill="none" stroke="currentColor" stroke-width="2"><rect x="3" y="3" width="7" height="7" rx="1.5"/><rect x="14" y="3" width="7" height="7" rx="1.5"/><rect x="3" y="14" width="7" height="7" rx="1.5"/><rect x="14" y="14" width="7" height="7" rx="1.5"/></svg>
+                        </button>
+                        <div id="listManageSort"></div>
+                        <button type="button" id="listManageCancelBtn" class="profile-edit-outline-btn hidden">Cancel</button>
+                        <button type="button" id="listManageDeleteBtn" class="account-danger-btn">Delete</button>
+                        <button type="button" id="listManageViewBtn" class="profile-edit-outline-btn">View list</button>
+                        <button type="button" id="listManageSaveBtn" class="save-btn" style="margin:0;">Save</button>
+                    </div>
+                    <div id="listAddSearchResults" class="list-add-results"></div>
+                </div>
+
+                <div id="listDetailFilterBar" class="poster-row-header-controls list-detail-filter-bar hidden">
+                    <div id="listDetailDecadeFilter"></div>
+                    <div id="listDetailGenreFilter"></div>
+                    <div class="sort-control-group">
+                        <div id="listDetailSort"></div>
+                        <button type="button" id="listDetailSortDir" class="sort-direction-btn" title="Descending (click for ascending)">
+                            <svg viewBox="0 0 24 24" width="16" height="16"><path d="M12 4v16M12 20l-5-5M12 20l5-5" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"/></svg>
+                        </button>
+                    </div>
+                </div>
+
+                <div id="listDetailSummaryRow" class="list-detail-summary-row hidden">
+                    <p id="listDetailDescription" class="list-detail-description"></p>
+                    <div class="list-detail-summary-side">
+                        <!-- Letterboxd-style stacked action rectangle, sitting right above
+                             the watched-stat box: "Edit this list…" goes straight to the edit
+                             page, "Share" is its own row underneath. -->
+                        <div class="list-owner-actions-box">
+                            <button type="button" id="listDetailLikeBtn" class="list-owner-actions-row list-like-btn">
+                                <svg class="list-like-heart" viewBox="0 0 24 24" width="17" height="17" stroke="currentColor" stroke-width="2" stroke-linejoin="round"><path d="M12 21s-7.5-4.6-9.6-9.3C.9 8.3 3 4.5 6.7 4.5c2 0 3.4 1 5.3 3 1.9-2 3.3-3 5.3-3 3.7 0 5.8 3.8 4.3 7.2C19.5 16.4 12 21 12 21z"/></svg>
+                                <span id="listDetailLikeLabel">Like this list?</span>
+                                <span id="listDetailLikeCount" class="list-like-count"></span>
+                            </button>
+                            <button type="button" id="listDetailCloneBtn" class="list-owner-actions-row list-clone-btn">
+                                <svg viewBox="0 0 24 24" width="17" height="17" fill="none" stroke="currentColor" stroke-width="2" stroke-linejoin="round"><rect x="9" y="9" width="12" height="12" rx="2"/><path d="M5 15V5a2 2 0 0 1 2-2h8"/></svg>
+                                <span>Clone this list</span>
+                                <span id="listDetailCloneCount" class="list-like-count"></span>
+                            </button>
+                            <!-- Owner-only rows -->
+                            <div class="list-owner-only" id="listDetailOwnerActions">
+                                <button type="button" id="listDetailEditBtn" class="list-owner-actions-row">Edit this list…</button>
+                                <button type="button" id="listDetailVisibilityBtn" class="list-owner-actions-row">Make this list private</button>
+                                <div class="list-share-wrap">
+                                    <button type="button" id="listDetailShareBtn" class="list-owner-actions-row">Share</button>
+                                    <div class="list-share-popover">
+                                        <input type="text" id="listShareLinkInput" class="list-share-link" readonly>
+                                        <button type="button" id="listShareCopyBtn" class="list-share-icon-btn" title="Copy link">
+                                            <svg viewBox="0 0 24 24" width="16" height="16" fill="none" stroke="currentColor" stroke-width="2" stroke-linejoin="round"><rect x="9" y="9" width="12" height="12" rx="2"/><path d="M5 15V5a2 2 0 0 1 2-2h8"/></svg>
+                                        </button>
+                                        <button type="button" id="listShareFamilyBtn" class="list-share-family-btn" title="Share with family">
+                                            <svg viewBox="0 0 24 24" width="16" height="16" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><circle cx="9" cy="8" r="3"/><circle cx="17" cy="9" r="2.4"/><path d="M3 20c0-3.3 2.7-6 6-6s6 2.7 6 6M15 15c3 0 6 1.6 6 5"/></svg>
+                                            Family
+                                        </button>
+                                    </div>
+                                </div>
+                            </div>
+                        </div>
+                        <div id="listDetailWatchedStat" class="list-watched-stat hidden">
+                            <span class="list-watched-stat-label">You've already</span>
+                            <span id="listDetailWatchedStatValue" class="list-watched-stat-value"></span>
+                        </div>
+                        <div id="listDetailGenres" class="list-detail-genres list-genre-tags"></div>
+                    </div>
+                </div>
+
+                <div id="listManageBox">
+                    <div id="listDetailGrid"></div>
+                </div>
+                <div id="listDetailPager" class="list-pager hidden"></div>
+
+                <div id="listComments" class="list-comments hidden"></div>
+            </div>
+
+            <div id="dashboardView">
+                <div id="heroBanner" class="hero-banner hidden"></div>
+
+                <div class="library-search-wrap">
+                    <svg class="library-search-icon" viewBox="0 0 24 24" width="18" height="18"><circle cx="11" cy="11" r="7" fill="none" stroke="currentColor" stroke-width="2"/><line x1="21" y1="21" x2="16.65" y2="16.65" stroke="currentColor" stroke-width="2" stroke-linecap="round"/></svg>
+                    <input type="text" id="librarySearchInput" class="library-search-input" placeholder="Search what you've already added…">
+                </div>
+
+                <div id="continueWatchingSection" class="poster-row-section hidden">
+                    <div class="poster-row-header">
+                        <h3 id="continueWatchingTitle">Continue Watching</h3>
+                        <button type="button" class="view-all-btn" data-target="continueWatchingRow">View All</button>
+                    </div>
+                    <div id="continueWatchingRow" class="poster-row"></div>
+                </div>
+
+                <div id="continueReadingSection" class="poster-row-section hidden">
+                    <div class="poster-row-header">
+                        <h3 id="continueReadingTitle">Continue Reading</h3>
+                        <button type="button" class="view-all-btn" data-target="continueReadingRow">View All</button>
+                    </div>
+                    <div id="continueReadingRow" class="poster-row"></div>
+                </div>
+
+                <div id="continuePlayingSection" class="poster-row-section hidden">
+                    <div class="poster-row-header">
+                        <h3 id="continuePlayingTitle">Continue Playing</h3>
+                        <button type="button" class="view-all-btn" data-target="continuePlayingRow">View All</button>
+                    </div>
+                    <div id="continuePlayingRow" class="poster-row"></div>
+                </div>
+
+                <div id="queueSection" class="poster-row-section hidden">
+                    <div class="poster-row-header">
+                        <h3 id="queueTitle">Up Next</h3>
+                        <div class="poster-row-header-controls">
+                            <button type="button" class="view-all-btn" data-target="queueRow">View All</button>
+                        </div>
+                    </div>
+                    <div id="queueRow" class="poster-row"></div>
+                </div>
+
+                <div id="nextWatchSection" class="poster-row-section hidden">
+                    <div class="poster-row-header">
+                        <h3 id="nextWatchTitle">Your Next Watch</h3>
+                        <div class="poster-row-header-controls">
+                            <div class="library-search-wrap profile-filter-search">
+                                <svg class="library-search-icon" width="16" height="16" viewBox="0 0 24 24" fill="none"><circle cx="11" cy="11" r="7" stroke="currentColor" stroke-width="2"/><path d="M21 21l-4.3-4.3" stroke="currentColor" stroke-width="2" stroke-linecap="round"/></svg>
+                                <input type="text" id="nextWatchSearch" class="library-search-input" placeholder="Search…">
+                            </div>
+                            <div id="nextWatchDecade"></div>
+                            <div id="nextWatchGenre"></div>
+                            <div class="sort-control-group"><div id="nextWatchSort"></div>
+<button type="button" id="nextWatchSortDir" class="sort-direction-btn" title="Descending (click for ascending)">
+                                <svg viewBox="0 0 24 24" width="16" height="16"><path d="M12 4v16M12 20l-5-5M12 20l5-5" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"/></svg>
+                            </button></div>
+                            <button type="button" id="nextWatchRouletteBtn" class="roulette-btn" title="Pick one for me">
+                                <svg viewBox="0 0 24 24" width="18" height="18"><rect x="3" y="3" width="18" height="18" rx="4" fill="none" stroke="currentColor" stroke-width="2"/><circle cx="8" cy="8" r="1.5" fill="currentColor"/><circle cx="16" cy="8" r="1.5" fill="currentColor"/><circle cx="8" cy="16" r="1.5" fill="currentColor"/><circle cx="16" cy="16" r="1.5" fill="currentColor"/><circle cx="12" cy="12" r="1.5" fill="currentColor"/></svg>
+                            </button>
+                            <button type="button" class="view-all-btn" data-target="nextWatchRow">View All</button>
+                        </div>
+                    </div>
+                    <div id="nextWatchRow" class="poster-row"></div>
+                </div>
+
+                <div id="seriesNextSection" class="poster-row-section hidden">
+                    <div class="poster-row-header">
+                        <h3 id="seriesNextTitle">Series to Watch</h3>
+                        <div class="poster-row-header-controls">
+                            <div class="library-search-wrap profile-filter-search">
+                                <svg class="library-search-icon" width="16" height="16" viewBox="0 0 24 24" fill="none"><circle cx="11" cy="11" r="7" stroke="currentColor" stroke-width="2"/><path d="M21 21l-4.3-4.3" stroke="currentColor" stroke-width="2" stroke-linecap="round"/></svg>
+                                <input type="text" id="seriesNextSearch" class="library-search-input" placeholder="Search…">
+                            </div>
+                            <div id="seriesNextDecade"></div>
+                            <div id="seriesNextGenre"></div>
+                            <div class="sort-control-group"><div id="seriesNextSort"></div>
+<button type="button" id="seriesNextSortDir" class="sort-direction-btn" title="Descending (click for ascending)">
+                                <svg viewBox="0 0 24 24" width="16" height="16"><path d="M12 4v16M12 20l-5-5M12 20l5-5" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"/></svg>
+                            </button></div>
+                            <button type="button" id="seriesNextRouletteBtn" class="roulette-btn" title="Pick one for me">
+                                <svg viewBox="0 0 24 24" width="18" height="18"><rect x="3" y="3" width="18" height="18" rx="4" fill="none" stroke="currentColor" stroke-width="2"/><circle cx="8" cy="8" r="1.5" fill="currentColor"/><circle cx="16" cy="8" r="1.5" fill="currentColor"/><circle cx="8" cy="16" r="1.5" fill="currentColor"/><circle cx="16" cy="16" r="1.5" fill="currentColor"/><circle cx="12" cy="12" r="1.5" fill="currentColor"/></svg>
+                            </button>
+                            <button type="button" class="view-all-btn" data-target="seriesNextRow">View All</button>
+                        </div>
+                    </div>
+                    <div id="seriesNextRow" class="poster-row"></div>
+                </div>
+            </div>
+        </section>
+
+        <section id="detailPage" class="hidden">
+            <div class="detail-page-header">
+                <button id="detailBackBtn" class="back-btn"><svg class="back-btn-icon" viewBox="0 0 24 24" width="16" height="16" fill="none" stroke="currentColor" stroke-width="2.6" stroke-linecap="round" stroke-linejoin="round"><polyline points="15 18 9 12 15 6"/></svg> Back</button>
+                <div class="detail-header-actions">
+                    <div class="detail-panel hidden" id="detailPanel">
+                        <div class="panel-tiles">
+                            <div id="statusButtonRow"></div>
+                            <div id="panelLikeTile"></div>
+                            <div id="queueBtnContainer"></div>
+                        </div>
+                        <div class="panel-rated" id="panelRated"></div>
+                        <button type="button" class="panel-row hidden" id="panelActivityBtn">Show your activity</button>
+                        <div class="panel-row-wrap">
+                            <button type="button" class="panel-row" id="panelLogBtn">Log in the Diary</button>
+                            <div class="panel-flyout hidden" id="panelFlyout"></div>
+                        </div>
+                        <div id="listAddButtonRow" class="panel-list-row"></div>
+                        <button type="button" class="panel-row" id="panelShareBtn">Share</button>
+                    </div>
+                </div>
+            </div>
+            <div id="detailContent"></div>
+        </section>
+
+        <section id="personPage" class="hidden">
+            <button id="personBackBtn" class="back-btn profile-back-btn"><svg class="back-btn-icon" viewBox="0 0 24 24" width="16" height="16" fill="none" stroke="currentColor" stroke-width="2.6" stroke-linecap="round" stroke-linejoin="round"><polyline points="15 18 9 12 15 6"/></svg> Back</button>
+            <div id="personContent"></div>
+        </section>
+
+        <section id="profilePage" class="hidden">
+            <button id="profileBackBtn" class="back-btn profile-back-btn"><svg class="back-btn-icon" viewBox="0 0 24 24" width="16" height="16" fill="none" stroke="currentColor" stroke-width="2.6" stroke-linecap="round" stroke-linejoin="round"><polyline points="15 18 9 12 15 6"/></svg> Back</button>
+
+            <div id="profileLoadingOverlay" class="profile-loading-overlay"><div class="loading-spinner"></div><p class="loading-text">Loading…</p></div>
+
+            <div class="profile-banner" id="profileBanner">
+                <div class="profile-banner-bg">
+                    <img id="profileBannerImg" class="profile-banner-img" alt="">
+                </div>
+                <input type="file" id="profileBannerFileInput" accept="image/*" class="hidden">
+
+                <div class="profile-banner-header">
+                    <div class="profile-avatar-wrap">
+                        <div id="profileAvatarLarge" class="profile-avatar-large"></div>
+                        <input type="file" id="profileAvatarFileInput" accept="image/*" class="hidden">
+                    </div>
+                    <div class="profile-header-info">
+                        <div class="profile-name-row">
+                            <h1 id="profileNameDisplay" class="profile-name-display"></h1>
+                            <div class="profile-menu-wrap">
+                                <button type="button" id="profileMenuBtn" class="profile-menu-btn" title="More">&#8943;</button>
+                                <div id="profileMenu" class="profile-menu hidden">
+                                    <button type="button" data-act="copy">Copy profile link</button>
+                                </div>
+                            </div>
+                        </div>
+                        <p id="profileBioDisplay" class="profile-bio-display"></p>
+                        <div id="profileMetaLine" class="profile-meta-line"></div>
+                    </div>
+                    <div class="profile-stats-row" id="profileStatsRow"></div>
+                </div>
+            </div>
+
+            <div class="profile-body">
+                <button type="button" id="profileEditBtn" class="profile-edit-btn profile-view-only">Edit Profile</button>
+
+                <div id="profileEditPanel" class="profile-edit-panel profile-edit-only">
+                    <div class="profile-edit-breadcrumb"><span id="profileEditBreadcrumbName"></span> <span class="profile-edit-breadcrumb-sep">»</span> Edit Profile</div>
+
+                    <div class="profile-edit-layout">
+                        <nav class="profile-edit-nav" id="profileEditNav">
+                            <button type="button" class="profile-edit-nav-item active" data-section="general">General</button>
+                            <button type="button" class="profile-edit-nav-item" data-section="avatar">Avatar</button>
+                            <button type="button" class="profile-edit-nav-item" data-section="banner">Profile Background</button>
+                        </nav>
+
+                        <div class="profile-edit-content">
+                            <div class="profile-edit-section active" data-section="general">
+                                <h3>General</h3>
+                                <label class="profile-edit-field-label" for="profileNameInput">Display Name</label>
+                                <input type="text" id="profileNameInput" class="profile-edit-field-input" placeholder="Display name" maxlength="40">
+                                <label class="profile-edit-field-label" for="profileLocationInput">Location</label>
+                                <input type="text" id="profileLocationInput" class="profile-edit-field-input" placeholder="City, Country" maxlength="60">
+                                <label class="profile-edit-field-label" for="profileXInput">X (Twitter) handle</label>
+                                <input type="text" id="profileXInput" class="profile-edit-field-input" placeholder="@handle" maxlength="30">
+                                <label class="profile-edit-field-label" for="profileBioInput">Bio</label>
+                                <textarea id="profileBioInput" class="profile-bio-input" placeholder="Add a short bio…" maxlength="160"></textarea>
+                            </div>
+
+                            <div class="profile-edit-section" data-section="avatar">
+                                <h3>Avatar</h3>
+                                <p class="profile-edit-hint">Choose a photo, or pick a color for your initial. Changes appear on your avatar above right away.</p>
+                                <div class="profile-edit-avatar-actions">
+                                    <button type="button" id="profileAvatarUploadBtn" class="profile-edit-outline-btn">Upload photo</button>
+                                    <button type="button" id="profileRemovePhotoBtn" class="profile-remove-photo-btn hidden">Remove photo</button>
+                                </div>
+                                <div class="profile-avatar-colors" id="profileColorSwatches"></div>
+                            </div>
+
+                            <div class="profile-edit-section" data-section="banner">
+                                <h3>Profile Background</h3>
+                                <p class="profile-edit-hint">Pick a banner image for the top of your profile.</p>
+                                <button type="button" id="profileBannerUploadBtn" class="profile-edit-outline-btn">Upload banner</button>
+                            </div>
+                        </div>
+                    </div>
+
+                    <div class="profile-edit-actionbar">
+                        <button type="button" id="profileEditCancelBtn" class="profile-edit-cancel-btn">Cancel</button>
+                        <button type="button" id="profileSaveBtn" class="save-btn">Save</button>
+                    </div>
+                </div>
+
+                <div class="profile-tabs profile-view-only" id="profileTabs">
+                    <button type="button" class="profile-tab active" data-tab="overview">Overview</button>
+                    <button type="button" class="profile-tab" data-tab="activity">Activity</button>
+                    <button type="button" class="profile-tab" data-tab="diary">Diary</button>
+                    <button type="button" class="profile-tab" data-tab="films">Watched</button>
+                    <button type="button" class="profile-tab" data-tab="books">Read</button>
+                    <button type="button" class="profile-tab" data-tab="games">Played</button>
+                    <button type="button" class="profile-tab" data-tab="reviews">Reviews</button>
+                    <button type="button" class="profile-tab" data-tab="lists">Lists</button>
+                    <button type="button" class="profile-tab" data-tab="likes">Likes</button>
+                    <button type="button" class="profile-tab" data-tab="network">Network</button>
+                    <button type="button" class="profile-tab" data-tab="stats">Stats</button>
+                    <div class="profile-tab-search" id="profileTabSearch">
+                        <input type="text" id="profileSearchInput" placeholder="Search reviews and lists…" autocomplete="off">
+                        <button type="button" id="profileSearchBtn" title="Search reviews and lists">
+                            <svg viewBox="0 0 24 24" width="18" height="18" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round"><circle cx="11" cy="11" r="7"/><path d="M21 21l-4.3-4.3"/></svg>
+                        </button>
+                    </div>
+                </div>
+                <div id="profileTabContent" class="profile-view-only"></div>
+            </div>
+        </section>
+
+        <section id="accountPage" class="hidden">
+            <button id="accountBackBtn" class="back-btn"><svg class="back-btn-icon" viewBox="0 0 24 24" width="16" height="16" fill="none" stroke="currentColor" stroke-width="2.6" stroke-linecap="round" stroke-linejoin="round"><polyline points="15 18 9 12 15 6"/></svg> Back</button>
+            <div class="account-page-header">
+                <span id="accountPageBreadcrumbName"></span> <span class="profile-edit-breadcrumb-sep">»</span> Account
+            </div>
+
+            <div class="profile-edit-layout">
+                <nav class="profile-edit-nav" id="accountSettingsNav">
+                    <button type="button" class="profile-edit-nav-item active" data-section="details">Account Details</button>
+                    <button type="button" class="profile-edit-nav-item" data-section="family">Family Management</button>
+                    <button type="button" class="profile-edit-nav-item" data-section="security">Security &amp; Devices</button>
+                    <button type="button" class="profile-edit-nav-item" data-section="notifications">Notification Settings</button>
+                    <button type="button" class="profile-edit-nav-item" data-section="connected">Connected Accounts</button>
+                    <button type="button" class="profile-edit-nav-item" data-section="data">Data &amp; Browsing</button>
+                </nav>
+
+                <div class="profile-edit-content">
+                    <div class="profile-edit-section active" data-section="details">
+                        <h3>Account Details</h3>
+                        <div class="account-info-block">
+                            <div class="account-info-row"><span class="account-info-label">Email address</span><span id="accountDetailsEmail" class="account-info-value"></span></div>
+                            <div class="account-info-row"><span class="account-info-label">Status</span><span class="account-info-value account-info-value--good">Verified</span></div>
+                        </div>
+                        <div class="account-info-actions">
+                            <button type="button" id="accountChangeEmailBtn" class="profile-edit-outline-btn">Change my email address</button>
+                            <button type="button" id="accountManageNotifBtn" class="profile-edit-outline-btn">Notification Preferences</button>
+                            <button type="button" id="accountChangePasswordBtn" class="profile-edit-outline-btn">Change Password</button>
+                        </div>
+
+                        <div id="accountChangeEmailForm" class="account-inline-form hidden">
+                            <label class="profile-edit-field-label" for="accountNewEmailInput">New email address</label>
+                            <input type="email" id="accountNewEmailInput" class="profile-edit-field-input" placeholder="you@example.com">
+                            <p class="profile-edit-hint">We'll send a confirmation link to the new address — it won't take effect until you click it.</p>
+                            <div class="account-inline-form-actions">
+                                <button type="button" id="accountChangeEmailCancelBtn" class="profile-edit-cancel-btn">Cancel</button>
+                                <button type="button" id="accountChangeEmailConfirmBtn" class="save-btn">Send Confirmation</button>
+                            </div>
+                        </div>
+
+                        <div id="accountChangePasswordForm" class="account-inline-form hidden">
+                            <label class="profile-edit-field-label" for="accountOldPasswordInput">Current password</label>
+                            <input type="password" id="accountOldPasswordInput" class="profile-edit-field-input" placeholder="Your current password" autocomplete="current-password">
+                            <label class="profile-edit-field-label" for="accountNewPasswordInput">New password</label>
+                            <input type="password" id="accountNewPasswordInput" class="profile-edit-field-input" placeholder="At least 6 characters" autocomplete="new-password">
+                            <label class="profile-edit-field-label" for="accountConfirmPasswordInput">Confirm new password</label>
+                            <input type="password" id="accountConfirmPasswordInput" class="profile-edit-field-input" placeholder="Type it again" autocomplete="new-password">
+                            <div class="account-inline-form-actions">
+                                <button type="button" id="accountChangePasswordCancelBtn" class="profile-edit-cancel-btn">Cancel</button>
+                                <button type="button" id="accountChangePasswordConfirmBtn" class="save-btn">Update Password</button>
+                            </div>
+                        </div>
+
+                        <div class="account-danger-zone">
+                            <button type="button" id="accountDeleteBtn" class="account-danger-btn">Delete my account</button>
+                            <span class="profile-edit-hint">Learn more about permanently deleting your account and associated information.</span>
+                        </div>
+                    </div>
+
+                    <div class="profile-edit-section" data-section="family">
+                        <h3>Family Management</h3>
+                        <div id="familyInvitesForMe"></div>
+
+                        <!-- Shown until the account actually belongs to a family. -->
+                        <div id="familySetup" class="hidden">
+                            <p class="profile-edit-hint">Share your watchlist and let up to 5 household members join your family.</p>
+                            <div class="family-setup-choices">
+                                <button type="button" id="familySetupCreateBtn" class="family-setup-choice">
+                                    <span class="family-setup-choice-title">Create a Family</span>
+                                    <span class="family-setup-choice-sub">Start a new family and invite others</span>
+                                </button>
+                                <button type="button" id="familySetupJoinBtn" class="family-setup-choice">
+                                    <span class="family-setup-choice-title">Join a Family</span>
+                                    <span class="family-setup-choice-sub">Wait for an existing owner to invite you</span>
+                                </button>
+                            </div>
+
+                            <div id="familyCreateForm" class="account-inline-form hidden">
+                                <label class="profile-edit-field-label" for="familyNameInput">Family name</label>
+                                <input type="text" id="familyNameInput" class="profile-edit-field-input" placeholder="e.g. The Boschirolis" maxlength="60">
+                                <p class="profile-edit-hint">Only visible to current and invited members — you can rename it any time.</p>
+                                <div class="account-inline-form-actions">
+                                    <button type="button" id="familyCreateCancelBtn" class="profile-edit-cancel-btn">Cancel</button>
+                                    <button type="button" id="familyCreateConfirmBtn" class="save-btn">Create</button>
+                                </div>
+                            </div>
+
+                            <div id="familyJoinInfo" class="account-inline-form hidden">
+                                <p class="profile-edit-hint" style="margin-bottom:0">To join an existing family, an owner needs to invite you by email — any invite waiting for you shows up below automatically.</p>
+                            </div>
+                        </div>
+
+                        <!-- Shown once the account belongs to a family, owned or joined. -->
+                        <div id="familyManage" class="hidden">
+                            <div class="family-name-row">
+                                <span>Your family:</span>
+                                <span id="familyNameDisplay" class="family-name-value"></span>
+                                <input type="text" id="familyNameEditInput" class="profile-edit-field-input hidden" maxlength="60">
+                                <button type="button" id="familyNameEditBtn" class="family-name-edit-btn" title="Rename family">✎</button>
+                                <button type="button" id="familyNameSaveBtn" class="save-btn hidden" style="padding:0.5rem 1.3rem;font-size:1.1rem;">Save</button>
+                            </div>
+                            <div id="familyMembersList"></div>
+                            <div id="familySentInvites"></div>
+                            <div class="family-invite-row">
+                                <input type="email" id="familyInviteEmail" placeholder="Invite by email">
+                                <button type="button" id="familyInviteBtn" class="save-btn">Invite</button>
+                            </div>
+                        </div>
+                    </div>
+
+                    <div class="profile-edit-section" data-section="security">
+                        <h3>Security &amp; Devices</h3>
+                        <p class="profile-edit-hint">Review where you're signed in and keep your account secure.</p>
+                        <div class="account-info-actions">
+                            <button type="button" id="accountSignOutOthersBtn" class="profile-edit-outline-btn">Sign out of all other devices</button>
+                        </div>
+                    </div>
+
+                    <div class="profile-edit-section" data-section="notifications">
+                        <h3>Notification Settings</h3>
+                        <p class="profile-edit-hint">Choose what shows up in your notification bell.</p>
+                        <label class="account-checkbox-row"><input type="checkbox" data-notif-pref="releases"> New releases from people, studios and series you follow</label>
+                        <label class="account-checkbox-row"><input type="checkbox" data-notif-pref="upcoming"> Upcoming releases</label>
+                        <label class="account-checkbox-row"><input type="checkbox" data-notif-pref="activity"> Friends &amp; family activity, new followers and list likes</label>
+                    </div>
+
+                    <div class="profile-edit-section" data-section="connected">
+                        <h3>Connected Accounts</h3>
+                        <p class="profile-edit-hint">Bring your history in from other services.</p>
+                        <div id="connectedAccounts" class="conn-grid"></div>
+                    </div>
+
+                    <div class="profile-edit-section" data-section="data">
+                        <h3>Data &amp; Browsing</h3>
+                        <p class="profile-edit-hint">Manage what's stored about your activity.</p>
+                        <div class="account-info-actions">
+                            <button type="button" id="accountDownloadBtn" class="profile-edit-outline-btn">Download My Data</button>
+                            <button type="button" id="accountClearCacheBtn" class="profile-edit-outline-btn">Clear Local Cache</button>
+                        </div>
+                    </div>
+                </div>
+            </div>
+        </section>
+
+        <section id="officialAccountPage" class="hidden">
+            <button id="officialAccountBackBtn" class="back-btn profile-back-btn"><svg class="back-btn-icon" viewBox="0 0 24 24" width="16" height="16" fill="none" stroke="currentColor" stroke-width="2.6" stroke-linecap="round" stroke-linejoin="round"><polyline points="15 18 9 12 15 6"/></svg> Back</button>
+            <div id="officialAccountBody"></div>
+        </section>
+
+        <section id="collectionPage" class="hidden">
+            <button id="collectionBackBtn" class="back-btn"><svg class="back-btn-icon" viewBox="0 0 24 24" width="16" height="16" fill="none" stroke="currentColor" stroke-width="2.6" stroke-linecap="round" stroke-linejoin="round"><polyline points="15 18 9 12 15 6"/></svg> Back</button>
+            <h2 id="collectionPageTitle" class="search-page-title"></h2>
+            <div class="collection-page-controls poster-row-header-controls">
+                <div id="collectionDecade"></div>
+                <div id="collectionGenre"></div>
+                <div class="sort-control-group">
+                    <div id="collectionSort"></div>
+                    <button type="button" id="collectionSortDir" class="sort-direction-btn" title="Descending (click for ascending)">
+                        <svg viewBox="0 0 24 24" width="16" height="16"><path d="M12 4v16M12 20l-5-5M12 20l5-5" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"/></svg>
+                    </button>
+                </div>
+                <button type="button" id="collectionViewBtn" class="sort-direction-btn"></button>
+            </div>
+            <div id="collectionPageInfo" class="collection-page-info"></div>
+            <div id="collectionPageGrid" class="collection-page-grid"></div>
+        </section>
+
+        <section id="searchPage" class="hidden">
+            <button id="searchBackBtn" class="back-btn"><svg class="back-btn-icon" viewBox="0 0 24 24" width="16" height="16" fill="none" stroke="currentColor" stroke-width="2.6" stroke-linecap="round" stroke-linejoin="round"><polyline points="15 18 9 12 15 6"/></svg> Back</button>
+            <div class="search-page-header">
+                <h2 id="searchPageTitle" class="search-page-title"></h2>
+                <div class="search-page-filters">
+                    <div id="searchTypeFilter"></div>
+                    <div id="searchDecadeFilter"></div>
+                    <div id="searchGenreFilter"></div>
+                    <div class="sort-control-group">
+                        <div id="searchSort"></div>
+                        <button type="button" id="searchSortDir" class="sort-direction-btn" title="Descending (click for ascending)">
+                            <svg viewBox="0 0 24 24" width="16" height="16"><path d="M12 4v16M12 20l-5-5M12 20l5-5" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"/></svg>
+                        </button>
+                    </div>
+                </div>
+            </div>
+            <div id="searchPageResults"></div>
+        </section>
+    </main>
+
+    <div id="confirmModal" class="confirm-modal hidden">
+        <div class="confirm-modal-box">
+            <p id="confirmModalMessage"></p>
+            <div class="confirm-modal-actions">
+                <button type="button" id="confirmModalCancel" class="confirm-modal-cancel">Cancel</button>
+                <button type="button" id="confirmModalOk" class="confirm-modal-ok">Remove</button>
+            </div>
+        </div>
+    </div>
+
+    <div id="listNoteModal" class="confirm-modal hidden">
+        <div class="list-note-modal-box">
+            <div class="list-note-modal-header">
+                <h3>Edit list entry</h3>
+                <button type="button" id="listNoteModalClose" class="list-note-modal-close" aria-label="Close">&times;</button>
+            </div>
+            <div class="list-note-modal-item">
+                <img id="listNoteModalPoster" src="" alt="">
+                <div class="list-item-title"><span id="listNoteModalTitle"></span> <span id="listNoteModalYear" class="list-item-year"></span></div>
+            </div>
+            <textarea id="listNoteModalTextarea" class="list-note-textarea" placeholder="Add note…" maxlength="500"></textarea>
+            <div class="confirm-modal-actions">
+                <button type="button" id="listNoteModalCancel" class="confirm-modal-cancel">Cancel</button>
+                <button type="button" id="listNoteModalSave" class="confirm-modal-ok">Save</button>
+            </div>
+        </div>
+    </div>
+
+    <div id="imageLightbox" class="lightbox hidden">
+        <button id="lightboxClose" class="lightbox-close">&#10005;</button>
+        <img id="lightboxImg" alt="">
+    </div>
+
+    <div id="toastContainer" class="toast-container"></div>
+
+    <div id="rouletteOverlay" class="roulette-overlay hidden">
+        <div class="roulette-box">
+            <button type="button" id="rouletteCloseBtn" class="roulette-close-btn" aria-label="Close">&#10005;</button>
+            <h2 id="rouletteHeading" class="roulette-heading">Picking something for you…</h2>
+            <div class="roulette-viewport">
+                <div class="roulette-frame"></div>
+                <div id="rouletteTrack" class="roulette-track"></div>
+            </div>
+            <div id="rouletteResult" class="roulette-result hidden">
+                <img id="rouletteResultPoster" class="roulette-result-poster" alt="">
+                <h3 id="rouletteResultTitle" class="roulette-result-title"></h3>
+                <div class="roulette-result-actions">
+                    <button type="button" id="rouletteSpinAgainBtn" class="confirm-modal-cancel">Pick Again</button>
+                    <button type="button" id="rouletteSaveBtn" class="switch-profile-btn">Add to Queue</button>
+                    <button type="button" id="rouletteOpenBtn" class="confirm-modal-ok">Open</button>
+                </div>
+            </div>
+        </div>
+    </div>
+
+    <div id="queuePopup" class="queue-popup hidden">
+        <button type="button" id="queuePopupClose" class="queue-popup-close" aria-label="Dismiss">&#10005;</button>
+        <div class="queue-popup-label">From the Wheel</div>
+        <img id="queuePopupPoster" class="queue-popup-poster" alt="">
+        <div id="queuePopupTitle" class="queue-popup-title"></div>
+        <button type="button" id="queuePopupAddBtn" class="switch-profile-btn queue-popup-add">Add to Queue</button>
+    </div>
+
+    <footer class="tmdb-credit">
+        <span class="footer-copy">&copy; 2026 Lucas Salomão Boschiroli. All rights reserved.</span>
+        <span class="footer-tmdb">This product uses the TMDB API but is not endorsed or certified by TMDB.</span>
+    </footer>
+
+    <script src="status-labels.js"></script>
+    <script src="renderer.js"></script>
+</body>
+</html>

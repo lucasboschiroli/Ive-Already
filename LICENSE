@@ -1,0 +1,25 @@
+Copyright (c) 2026 Lucas Salomão Boschiroli. All rights reserved.
+
+"I've Already" (the "Software") is proprietary. No part of the Software, including
+its source code, design, text and artwork, may be copied, modified, merged, published,
+distributed, sublicensed, sold or used to create derivative works without the prior
+written permission of the copyright holder.
+
+Permission is granted to install and use the compiled application for personal,
+non-commercial purposes only. Reverse engineering, decompiling or disassembling the
+compiled application is not permitted, except where applicable law expressly allows it.
+
+THE SOFTWARE IS PROVIDED "AS IS", WITHOUT WARRANTY OF ANY KIND, EXPRESS OR IMPLIED,
+INCLUDING BUT NOT LIMITED TO THE WARRANTIES OF MERCHANTABILITY, FITNESS FOR A
+PARTICULAR PURPOSE AND NONINFRINGEMENT. IN NO EVENT SHALL THE COPYRIGHT HOLDER BE
+LIABLE FOR ANY CLAIM, DAMAGES OR OTHER LIABILITY ARISING FROM, OUT OF OR IN
+CONNECTION WITH THE SOFTWARE OR ITS USE.
+
+Third-party services and data
+-----------------------------
+This product uses the TMDB API but is not endorsed or certified by TMDB. Book data
+comes from Open Library, game data from RAWG, and some metadata from Wikidata and
+OMDb. Letterboxd, Steam, PlayStation, Xbox and GOG names and logos belong to their
+respective owners and are used only to identify those services; this application is
+not affiliated with or endorsed by them. Each service's data remains subject to its
+own terms.

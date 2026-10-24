@@ -1,0 +1,21 @@
+# Optional: builds + publishes the installer whenever you push a tag like v0.2.0
+name: Release
+on:
+  push:
+    tags: ['v*']
+jobs:
+  win:
+    runs-on: windows-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with: { node-version: 20 }
+      - run: npm ci
+      - name: Write .env from secrets
+        shell: bash
+        run: |
+          printf 'TMDB_API_KEY=%s\nSUPABASE_URL=%s\nSUPABASE_ANON_KEY=%s\nRAWG_API_KEY=%s\nOMDB_API_KEY=%s\n' \
+            "${{ secrets.TMDB_API_KEY }}" "${{ secrets.SUPABASE_URL }}" "${{ secrets.SUPABASE_ANON_KEY }}" "${{ secrets.RAWG_API_KEY }}" "${{ secrets.OMDB_API_KEY }}" > .env
+      - run: npx electron-builder --win --publish always
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
