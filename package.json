@@ -13,7 +13,7 @@
   "dependencies": {
     "@supabase/supabase-js": "^2.112.0",
     "dotenv": "^16.4.5",
-    "electron-updater": "^6.3.9",
+    "electron-updater": "^6.8.11",
     "ws": "^8.18.0"
   },
   "devDependencies": {
@@ -23,11 +23,36 @@
   "build": {
     "appId": "com.ivealready.app",
     "productName": "I've Already",
-    "directories": { "buildResources": "build", "output": "dist" },
-    "files": ["src/**/*", "package.json", "!src/main/db.js", "!src/main/schema.sql"],
-    "extraResources": [{ "from": ".env", "to": ".env" }],
-    "win": { "target": "nsis", "icon": "build/icon.ico" },
-    "nsis": { "oneClick": false, "allowToChangeInstallationDirectory": true, "createDesktopShortcut": true, "createStartMenuShortcut": true },
-    "publish": { "provider": "github", "owner": "lucasboschiroli", "repo": "IveAlready" }
+    "directories": {
+      "buildResources": "build",
+      "output": "dist"
+    },
+    "files": [
+      "src/**/*",
+      "package.json",
+      "!src/main/db.js",
+      "!src/main/schema.sql"
+    ],
+    "extraResources": [
+      {
+        "from": ".env",
+        "to": ".env"
+      }
+    ],
+    "win": {
+      "target": "nsis",
+      "icon": "build/icon.ico"
+    },
+    "nsis": {
+      "oneClick": false,
+      "allowToChangeInstallationDirectory": true,
+      "createDesktopShortcut": true,
+      "createStartMenuShortcut": true
+    },
+    "publish": {
+      "provider": "github",
+      "owner": "lucasboschiroli",
+      "repo": "IveAlready"
+    }
   }
 }
