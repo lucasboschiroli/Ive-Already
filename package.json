@@ -17,8 +17,8 @@
     "ws": "^8.18.0"
   },
   "devDependencies": {
-    "electron": "^32.0.0",
-    "electron-builder": "^25.1.8"
+    "electron": "^44.10.2",
+    "electron-builder": "^26.18.0"
   },
   "build": {
     "appId": "com.ivealready.app",
@@ -29,6 +29,8 @@
     },
     "files": [
       "src/**/*",
+      "build/icon.ico",
+      "build/icon.png",
       "package.json",
       "!src/main/db.js",
       "!src/main/schema.sql"
