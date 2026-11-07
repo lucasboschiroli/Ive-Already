@@ -150,6 +150,12 @@ function showApp() {
     openPendingListLink(); // a list link clicked before signing in
 }
 
+// The message from a failed window.api call, without Electron's
+// "Error invoking remote method 'x': Error:" wrapper.
+function ipcErrorText(err) {
+    return String(err?.message || err).replace(/^Error invoking remote method '[^']+': (\w*Error: )?/, '');
+}
+
 // ivealready://list/<token> links (see main.js). The token waits in the main
 // process until there's a signed-in session to open it with.
 async function openPendingListLink() {
@@ -158,7 +164,7 @@ async function openPendingListLink() {
     try {
         openListFromAnywhere(await window.api.openSharedList(token));
     } catch (err) {
-        showToast(`Couldn't open that list: ${String(err.message || err).replace(/^Error invoking remote method '[^']+': (Error: )?/, '')}`, true);
+        showToast(`Couldn't open that list: ${ipcErrorText(err)}`, true);
     }
 }
 window.api.onListLink(() => {
@@ -4885,9 +4891,11 @@ async function openDetails(tmdbId, mediaType, { recordHistory = true } = {}) {
     try {
         details = await window.api.getDetails(tmdbId, mediaType);
     } catch (err) {
-        els.detailContent.innerHTML = `<p class="empty-state">Couldn't load this title: ${escapeHtml(err.message)}</p>`;
+        els.detailContent.innerHTML = `<p class="empty-state">Couldn't load this title: ${escapeHtml(ipcErrorText(err))}</p>`;
         return;
     }
+    // The source (TMDB / RAWG / Open Library) didn't answer, so this is the saved copy.
+    if (details.offline_source) showToast(`${details.offline_source} isn't responding right now — showing your saved info`);
 
     const entryRef = { current: details.entry }; // mutable — status auto-save updates this in place
     const entry = entryRef.current; // snapshot for template values that don't need to react live (initial input values, textarea)

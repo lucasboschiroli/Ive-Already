@@ -455,4 +455,5 @@ module.exports = {
     getTvSeasonEpisodes,
     getPersonDetails,
     getBackdropPath,
+    normalizeDetails,
 };

@@ -10,8 +10,10 @@ async function rawgGet(path, params = {}) {
     const url = new URL(`${BASE}${path}`);
     url.searchParams.set('key', key);
     for (const [k, v] of Object.entries(params)) if (v !== undefined && v !== null) url.searchParams.set(k, v);
+    // RAWG normally answers in a second or two; during outages it hangs ~20s and
+    // then fails (522), so give up sooner and let callers fall back.
     const ctrl = new AbortController();
-    const timer = setTimeout(() => ctrl.abort(), 12000);
+    const timer = setTimeout(() => ctrl.abort(), 8000);
     try {
         const res = await fetch(url.toString(), { signal: ctrl.signal });
         if (!res.ok) throw new Error(`RAWG ${res.status} — ${path}`);

@@ -19,6 +19,42 @@ async function requireSession() {
     return session;
 }
 
+const SOURCE_NAMES = { game: 'RAWG', book: 'Open Library', movie: 'TMDB', tv: 'TMDB' };
+
+// Rebuilds a detail page from a saved media row, for when the source is down
+// (see media:getDetails). Movies and TV keep TMDB's whole response in
+// raw_json, so they come back nearly complete; books and games keep less, so
+// a few sections (trailers, similar titles…) are just empty until it's back.
+function detailsFromCache(row, mediaType) {
+    let raw = null;
+    try { raw = row.raw_json ? JSON.parse(row.raw_json) : null; } catch { raw = null; }
+    const base = {
+        tmdb_id: row.tmdb_id, imdb_id: row.imdb_id || null, media_type: mediaType, title: row.title,
+        original_title: row.original_title || row.title, poster_path: row.poster_path, backdrop_path: row.backdrop_path,
+        release_date: row.release_date, overview: row.overview || '', original_language: null, runtime: row.runtime,
+        episode_runtime: null, year_range: null, certification: null, number_of_seasons: row.number_of_seasons,
+        is_limited_series: false, number_of_episodes: row.number_of_episodes,
+        aired_episode_count: mediaType === 'tv' ? row.number_of_episodes : null, page_count: null,
+        genres: row.genres || '[]', tmdb_vote_average: row.tmdb_vote_average, trailer_key: null,
+        networks: [], studios: [], creators: [], writers: [], cast: [], seasons: null, raw_json: row.raw_json,
+    };
+    if ((mediaType === 'movie' || mediaType === 'tv') && raw && !raw.source) {
+        try { return { ...base, ...tmdb.normalizeDetails(raw, mediaType) }; } catch { return base; }
+    }
+    if (mediaType === 'game' && raw?.source === 'rawg') {
+        const developers = raw.developers || [];
+        return { ...base, platforms: raw.platforms || [], metacritic: raw.metacritic || null, playtime_hours: raw.playtime || null,
+            achievements_count: 0, studios: developers.map((d) => d.name),
+            publisher_links: developers.map((d) => ({ kind: 'developer', id: d.id, name: d.name })),
+            publishers_list: (raw.publishers || []).map((d) => ({ kind: 'gpublisher', id: d.id, name: d.name })) };
+    }
+    if (mediaType === 'book' && raw?.source === 'openlibrary') {
+        return { ...base, creators: raw.creators || [], page_count: raw.doc?.number_of_pages_median || null,
+            publisher_links: publishers.matchPublishers(raw.doc?.publisher) };
+    }
+    return base;
+}
+
 function registerHandlers() {
     // ---- auth ----
     ipcMain.handle('auth:signUp', async (_evt, { email, password }) => {
@@ -552,14 +588,44 @@ function registerHandlers() {
 
     // ---- fetch + cache full details, return with this account's entry state if any ----
     ipcMain.handle('media:getDetails', async (_evt, { tmdbId, mediaType }) => {
-        let details =
-            mediaType === 'book'
+        let details;
+        let cachedRow = null;
+        try {
+            details = mediaType === 'book'
                 ? await books.getBookDetails(tmdbId)
                 : mediaType === 'game'
                 ? await rawg.getGameDetails(tmdbId)
                 : mediaType === 'movie'
                     ? await tmdb.getMovieDetails(tmdbId)
                     : await tmdb.getTvDetails(tmdbId);
+        } catch (err) {
+            // The source is down or slow (RAWG has had outages answering 522
+            // after 20s): open the page from the saved copy instead of failing.
+            console.error(`getDetails ${mediaType} ${tmdbId} failed:`, err.message);
+            cachedRow = await sb.getMediaByKey(tmdbId, mediaType).catch(() => null);
+            const source = SOURCE_NAMES[mediaType] || 'TMDB';
+            if (!cachedRow) throw new Error(`${source} isn't responding right now, and this title hasn't been saved yet — try again in a bit`);
+            details = detailsFromCache(cachedRow, mediaType);
+            details.offline_source = source;
+        }
+
+        if (cachedRow) {
+            // Nothing new to save — the cache is where this came from.
+            const session = await sb.getSession();
+            const entry = session ? await sb.getEntryForMedia(session, cachedRow.id) : null;
+            return {
+                mediaId: cachedRow.id,
+                ...details,
+                imdb_rating: cachedRow.imdb_rating, imdb_votes: cachedRow.imdb_votes, rt_tomatometer: cachedRow.rt_tomatometer, awards: cachedRow.awards_text,
+                poster_url: tmdb.imageUrl(details.poster_path, 'w500'),
+                backdrop_url: tmdb.imageUrl(details.backdrop_path, 'w1280'),
+                watch_providers: { link: null, flatrate: [], rent: [], buy: [] },
+                seasons: details.seasons ? details.seasons.map((s) => ({ ...s, poster_url: tmdb.imageUrl(s.poster_path, 'w500') })) : null,
+                related: [],
+                similar: [],
+                entry: entry || null,
+            };
+        }
 
         const mediaId = await sb.upsertMedia(details);
         if (details.seasons) {

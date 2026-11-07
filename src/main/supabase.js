@@ -394,6 +394,14 @@ async function getMediaRatingsCache(mediaId) {
     return data;
 }
 
+// The saved copy of a title, by its source id — what a detail page falls back
+// to when TMDB / RAWG / Open Library isn't responding.
+async function getMediaByKey(tmdbId, mediaType) {
+    const { data, error } = await getClient().from('media').select('*').eq('tmdb_id', tmdbId).eq('media_type', mediaType).maybeSingle();
+    if (error) throw error;
+    return data;
+}
+
 async function getMediaById(mediaId) {
     const { data, error } = await getClient().from('media').select('*').eq('id', mediaId).single();
     if (error) throw error;
@@ -2046,6 +2054,7 @@ module.exports = {
     updateMediaRatings,
     getMediaRatingsCache,
     getMediaById,
+    getMediaByKey,
     upsertEntry,
     getEntryForMedia,
     listEntries,
