@@ -5290,8 +5290,15 @@ async function openDetails(tmdbId, mediaType, { recordHistory = true } = {}) {
                 e.stopPropagation();
                 const newStatus = btn.dataset.status;
                 try {
-                    const fields = { status: newStatus };
                     const today = todayISOLocal();
+                    // With a diary, the rows own the dates (see applyStatus in setupDetailPanel).
+                    const rewatchISO = dateRewatchedInput.wasExplicitlyCleared() ? null : today;
+                    if (await panelApi?.applyStatus(newStatus, rewatchISO)) {
+                        paintStatusButtons();
+                        showToast('Saved!');
+                        return;
+                    }
+                    const fields = { status: newStatus };
                     // Picking Watched/Read/Played, Rewatched, or Dropped
                     // directly, with no date set yet, assumes you mean
                     // "today" — mirrors the date-input side auto-advancing
@@ -5490,14 +5497,15 @@ function setupDetailPanel({ details, entryRef, dateStartedInput, dateFinishedInp
         sortDesc(logs);
     }
 
-    async function addLog({ watchedOn, startedOn, rewatch }) {
+    async function addLog({ watchedOn, startedOn, rewatch, force = false }) {
         await ensureEntry();
         await refreshLogs();
         if (!tableOk) throw new Error('no table');
         await materializeLegacy();
         // Same date as a viewing already in the diary (typically the date the
         // status menu filled in): that's the same viewing, not a rewatch.
-        const sameDay = watchedOn && logs.find((l) => l.watched_on === watchedOn);
+        // `force` is for an explicit "Rewatched" pick, which always means a new viewing.
+        const sameDay = !force && watchedOn && logs.find((l) => l.watched_on === watchedOn);
         if (sameDay) {
             if (startedOn && sameDay.started_on !== startedOn) await replaceLog(sameDay, { started_on: startedOn });
             return;
@@ -5505,6 +5513,25 @@ function setupDetailPanel({ details, entryRef, dateStartedInput, dateFinishedInp
         if (rewatch && logs.length === 0) logs.push(await apiAdd({ watched_on: null, started_on: null, is_rewatch: false }));
         logs.push(await apiAdd({ watched_on: watchedOn, started_on: startedOn, is_rewatch: rewatch }));
         sortDesc(logs);
+    }
+
+    // The status menu, once the diary has real rows: the rows own the dates, so
+    // Watched/Dropped only change the status, and Rewatched adds a rewatch row
+    // (setting just the entry's date would be undone by the next diary save).
+    // Returns false when there are no rows yet — the caller keeps its old
+    // behavior of filling in the entry's own dates.
+    async function applyStatus(status, rewatchISO) {
+        if (!['completed', 'dropped', 'rewatched'].includes(status) || !entryRef.current) return false;
+        await refreshLogs();
+        if (!tableOk || !logs.length) return false;
+        if (status === 'rewatched' && !logs.some((l) => l.is_rewatch)) {
+            await addLog({ watchedOn: rewatchISO, startedOn: null, rewatch: true, force: true });
+            await syncEntry(logs);
+        } else {
+            entryRef.current = await upsertEntryAndInvalidate(details.mediaId, { status });
+        }
+        paint();
+        return true;
     }
 
     // The page's own date fields edit the diary once it has real rows, so the
@@ -5864,7 +5891,7 @@ function setupDetailPanel({ details, entryRef, dateStartedInput, dateFinishedInp
     paint();
     panelEl.classList.remove('hidden');
     loaded.then(paint);
-    return { paint, editEntryDate, refresh: () => refreshLogs().then(paint) };
+    return { paint, editEntryDate, applyStatus, refresh: () => refreshLogs().then(paint) };
 }
 
 // "Add to list" — a Spotify "Add to playlist"-style dropdown under the
