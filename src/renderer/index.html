@@ -2,6 +2,11 @@
 <html lang="en">
 <head>
     <meta charset="UTF-8">
+    <!-- Scripts only from the app itself (no inline handlers, no eval); the
+         renderer makes no network requests of its own (everything goes
+         through window.api), so only images and the Google Fonts stylesheet
+         load from outside. -->
+    <meta http-equiv="Content-Security-Policy" content="default-src 'self'; script-src 'self'; style-src 'self' 'unsafe-inline' https://fonts.googleapis.com; font-src https://fonts.gstatic.com; img-src 'self' https: data: blob:; connect-src 'none'; object-src 'none'; base-uri 'none'; form-action 'none'">
     <title>I've Already</title>
     <link rel="stylesheet" href="styles/app.css">
     <!-- Warm up the connection to TMDB's image CDN on startup, before any

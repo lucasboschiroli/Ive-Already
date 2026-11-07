@@ -5,6 +5,27 @@ const IMG_BASE = 'https://image.tmdb.org/t/p/w342';
 // Posters/portraits are TMDB paths, except books/authors (Open Library) which are full URLs.
 const imgSrc = (p) => (/^https?:/.test(p || '') ? p : `${IMG_BASE}${p}`);
 
+// Broken-image fallbacks, in one listener instead of inline onerror="" (the
+// Content-Security-Policy in index.html blocks inline handlers).
+//   data-img-fallback="dim"     -> fade the broken poster
+//   data-img-fallback="remove"  -> drop the <img>
+//   data-fallback-src / data-fallback-html -> try another file, then swap in markup
+document.addEventListener('error', (e) => {
+    const img = e.target;
+    if (!(img instanceof HTMLImageElement)) return;
+    const mode = img.dataset.imgFallback;
+    if (mode === 'dim') img.style.opacity = '0.3';
+    else if (mode === 'remove') img.remove();
+    else if (img.dataset.fallbackSrc && !img.dataset.triedFallback) {
+        img.dataset.triedFallback = '1';
+        img.src = img.dataset.fallbackSrc;
+    } else if (img.dataset.fallbackHtml) {
+        const tpl = document.createElement('template');
+        tpl.innerHTML = img.dataset.fallbackHtml;
+        img.replaceWith(tpl.content);
+    }
+}, true); // error events don't bubble — listen in the capture phase
+
 // ---------------- auth gate ----------------
 // The whole app (header + main content) stays hidden until there's a
 // signed-in session. Data now lives in Supabase, scoped per account by
@@ -2301,7 +2322,7 @@ function createCustomSelect({ container, options, value, onChange }) {
                 </svg>
             </div>
             <div class="custom-select-menu hidden">
-                ${options.map((o) => `<div class="custom-select-option" data-value="${o.value}">${o.label}</div>`).join('')}
+                ${options.map((o) => `<div class="custom-select-option" data-value="${escapeHtml(o.value)}">${escapeHtml(o.label)}</div>`).join('')}
             </div>
         </div>
     `;
@@ -4561,7 +4582,7 @@ async function renderContinueWatchingRow(items, kind = 'tv', seq = dashLoadSeq) 
         return `
             <div class="poster-card" data-tmdb-id="${item.tmdb_id}" data-media-type="${item.media_type}">
                 <div class="poster-img-wrap">
-                    <img src="${posterUrl}" alt="${escapeHtml(item.title)}" loading="lazy" onerror="this.style.opacity=0.3">
+                    <img src="${posterUrl}" alt="${escapeHtml(item.title)}" loading="lazy" data-img-fallback="dim">
                 </div>
                 ${item.media_type === 'tv' ? `<div class="continue-watching-progress">
                     <div class="continue-watching-bar"><div class="continue-watching-fill" style="width:${pct}%"></div></div>
@@ -4665,7 +4686,7 @@ function renderPosterGrid(container, items, sortCriterion) {
         return `
             <div class="poster-card" data-tmdb-id="${item.tmdb_id}" data-media-type="${item.media_type}">
                 <div class="poster-img-wrap">
-                    <img src="${posterUrl}" alt="${title}" loading="lazy" onerror="this.style.opacity=0.3">
+                    <img src="${posterUrl}" alt="${title}" loading="lazy" data-img-fallback="dim">
                     ${dateBadge}
                     ${sortCriterion === 'queue' ? '<button type="button" class="queue-remove-btn" title="Remove from queue">&#10005;</button>' : ''}
                     <div class="film-card-overlay">
@@ -4740,7 +4761,7 @@ let rouletteSpinning = false;
 
 function rouletteCardHtml(item) {
     const posterUrl = item.poster_url || (item.poster_path ? `${imgSrc(item.poster_path)}` : '');
-    return `<div class="roulette-card"><img src="${posterUrl}" alt="${escapeHtml(item.title)}" loading="lazy" onerror="this.style.opacity=0.3"></div>`;
+    return `<div class="roulette-card"><img src="${posterUrl}" alt="${escapeHtml(item.title)}" loading="lazy" data-img-fallback="dim"></div>`;
 }
 
 function openRoulette(items) {
@@ -5839,7 +5860,7 @@ function renderRelatedRow(container, items, headingPrefix) {
         <div class="related-row">
             ${items.map((item) => `
                 <div class="related-item" data-tmdb-id="${item.tmdb_id}" data-media-type="${item.media_type}">
-                    <img src="${item.poster_url || ''}" alt="${escapeHtml(item.title)}" loading="lazy" onerror="this.style.opacity=0.3">
+                    <img src="${item.poster_url || ''}" alt="${escapeHtml(item.title)}" loading="lazy" data-img-fallback="dim">
                     ${statusFlag(item.status)}
                     <div class="related-title">${escapeHtml(item.title)}</div>
                     <div class="related-year">${(item.release_date || '').slice(0, 4)}</div>
@@ -6262,7 +6283,7 @@ function renderSearchResultsList() {
             return `
                 <div class="search-page-row" data-tmdb-id="${r.tmdb_id}" data-media-type="person">
                     <div class="search-page-row-poster search-page-row-poster-person">
-                        <img src="${posterUrl}" alt="${escapeHtml(r.title)}" loading="lazy" onerror="this.style.opacity=0.3">
+                        <img src="${posterUrl}" alt="${escapeHtml(r.title)}" loading="lazy" data-img-fallback="dim">
                     </div>
                     <div class="search-page-row-info">
                         <div class="search-page-row-title">${escapeHtml(r.title)}</div>
@@ -6283,7 +6304,7 @@ function renderSearchResultsList() {
         return `
             <div class="search-page-row" data-tmdb-id="${r.tmdb_id}" data-media-type="${r.media_type}">
                 <div class="poster-img-wrap search-page-row-poster">
-                    <img src="${posterUrl}" alt="${escapeHtml(r.title)}" loading="lazy" onerror="this.style.opacity=0.3">
+                    <img src="${posterUrl}" alt="${escapeHtml(r.title)}" loading="lazy" data-img-fallback="dim">
                     ${statusFlag(r.status)}
                 </div>
                 <div class="search-page-row-info">
@@ -6398,7 +6419,7 @@ function renderEntityCredits(container, credits, primaryDept, fallbackTitle) {
         grid.innerHTML = (expanded[sec] ? sorted : sorted.slice(0, 18)).map((c) => `
             <div class="poster-card" data-tmdb-id="${c.tmdb_id}" data-media-type="${c.media_type}">
                 <div class="poster-img-wrap">
-                    <img src="${c.poster_url || (c.poster_path ? imgSrc(c.poster_path) : '')}" alt="${escapeHtml(c.title)}" loading="lazy" onerror="this.style.opacity=0.3">
+                    <img src="${c.poster_url || (c.poster_path ? imgSrc(c.poster_path) : '')}" alt="${escapeHtml(c.title)}" loading="lazy" data-img-fallback="dim">
                     ${statusFlag(c.status)}
                     <div class="film-card-overlay">
                         <div class="film-card-title">${escapeHtml(c.title)}${c.release_date ? ` (${c.release_date.slice(0, 4)})` : ''}</div>
@@ -6437,7 +6458,7 @@ async function renderEntityPage(o) {
         <div class="profile-banner official-banner">
             <div class="profile-banner-bg" id="entityBannerBg"></div>
             <div class="profile-banner-header">
-                <div class="profile-avatar-wrap"><div class="profile-avatar-large entity-avatar${o.logo ? ' entity-avatar-logo' : ''}${o.imageUrl ? ' clickable' : ''}" id="entityAvatar" title="${o.imageUrl ? 'View picture' : ''}">${o.imageUrl ? `<img src="${escapeHtml(o.imageUrl)}" alt="${escapeHtml(o.name)}" onerror="this.remove()">` : `<span>${initial}</span>`}</div></div>
+                <div class="profile-avatar-wrap"><div class="profile-avatar-large entity-avatar${o.logo ? ' entity-avatar-logo' : ''}${o.imageUrl ? ' clickable' : ''}" id="entityAvatar" title="${o.imageUrl ? 'View picture' : ''}">${o.imageUrl ? `<img src="${escapeHtml(o.imageUrl)}" alt="${escapeHtml(o.name)}" data-img-fallback="remove">` : `<span>${initial}</span>`}</div></div>
                 <div class="profile-header-info">
                     <div class="profile-name-row">
                         <h1 class="profile-name-display">${escapeHtml(o.name)}</h1>
@@ -6588,10 +6609,12 @@ function dateBadgeFor(item, sortCriterion) {
     return formatBadgeDate(item.date_finished || item.date_started || item.date_rewatched);
 }
 
+// Safe for text AND attribute values — innerHTML alone leaves quotes as-is,
+// which let a title like `Say "Hi"` break out of alt="…".
 function escapeHtml(str) {
     const div = document.createElement('div');
     div.textContent = str ?? '';
-    return div.innerHTML;
+    return div.innerHTML.replace(/"/g, '&quot;').replace(/'/g, '&#39;');
 }
 
 // ---------------- init ----------------
@@ -7217,7 +7240,7 @@ function statsPosterGrid(section, key, title, rows, emptyMsg, rerender) {
         ${rows.length ? `<div class="poster-grid stats-poster-grid">${shown.map((r) => `
             <div class="poster-card" data-tmdb-id="${r.e.tmdb_id}" data-media-type="${r.e.media_type}">
                 <div class="poster-img-wrap">
-                    <img src="${statsPosterSrc(r.e)}" alt="${escapeHtml(r.e.title)}" loading="lazy" onerror="this.style.opacity=0.3">
+                    <img src="${statsPosterSrc(r.e)}" alt="${escapeHtml(r.e.title)}" loading="lazy" data-img-fallback="dim">
                     <div class="poster-date-badge ${r.cls}">${escapeHtml(r.label)}</div>
                     <div class="film-card-overlay"><div class="film-card-title">${escapeHtml(r.e.title)}${r.e.release_date ? ` (${r.e.release_date.slice(0, 4)})` : ''}</div></div>
                 </div>
@@ -7286,7 +7309,7 @@ function paintStatsPeople(section, items, kind) {
     const all = statsSortBy(statsAggregate(items, cfg.listOf), tab);
     const expanded = statsMore[kind];
     const shown = all.slice(0, expanded ? 30 : 10);
-    const img = (g) => !g.img ? `<span>${escapeHtml(g.name.charAt(0))}</span>` : `<img src="https://image.tmdb.org/t/p/${kind === 'studios' ? 'w185' : 'w185'}${g.img}" alt="" loading="lazy">`;
+    const img = (g) => !g.img ? `<span>${escapeHtml(g.name.charAt(0))}</span>` : `<img src="https://image.tmdb.org/t/p/w185${g.img}" alt="" loading="lazy">`;
     section.innerHTML = `
         <div class="stats-section-head"><h3>${cfg.title}</h3><span class="stats-section-line"></span>${statsTabsHtml(kind)}</div>
         ${shown.length ? `<div class="stats-people-grid">${shown.map((g) => `
@@ -8481,7 +8504,7 @@ async function runOfficialImport() {
         gog: svg('<circle cx="12" cy="12" r="9"/><circle cx="12" cy="12" r="3"/><path d="M12 3v3M12 18v3M3 12h3M18 12h3"/>'),
     };
     // Official logos: drop letterboxd/steam/psn/xbox/gog .svg or .png files into renderer/assets/logos/ — the generic icon shows until they exist.
-    const connLogo = (k0) => { const k = k0 === 'lb' ? 'letterboxd' : k0; return `<img class="conn-logo" src="assets/logos/${k}.svg" alt="" onerror="if(!this.dataset.p){this.dataset.p=1;this.src='assets/logos/${k}.png';}else{this.replaceWith(Object.assign(document.createElement('span'),{innerHTML:decodeURIComponent('${encodeURIComponent(CONN_ICONS[k0])}')}).firstChild);}">`; };
+    const connLogo = (k0) => { const k = k0 === 'lb' ? 'letterboxd' : k0; return `<img class="conn-logo" src="assets/logos/${k}.svg" alt="" data-fallback-src="assets/logos/${k}.png" data-fallback-html="${escapeHtml(CONN_ICONS[k0])}">`; };
     function renderConnected() {
         const box = document.getElementById('connectedAccounts');
         if (!box) return;

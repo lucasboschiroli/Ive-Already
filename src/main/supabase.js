@@ -350,10 +350,6 @@ async function updateMediaEpisodeCounts(mediaId, { number_of_seasons, number_of_
 
 // IMDb/Rotten Tomatoes numbers from OMDb — separate from upsertMedia since
 // they come from a different source and are optional (skipped entirely if
-// OMDB_API_KEY isn't set). Cached so the detail page doesn't need a fresh
-// OMDb request every single time it's opened.
-// IMDb/Rotten Tomatoes numbers from OMDb — separate from upsertMedia since
-// they come from a different source and are optional (skipped entirely if
 // OMDB_API_KEY isn't set). ratings_checked_at drives the caching in
 // ipc-handlers.js: re-checked at most once a week, so a title with no
 // Tomatometer yet (e.g. it hasn't released) doesn't get hit on every single
@@ -924,10 +920,8 @@ async function getLastWatchedSeasons(session, entryIds) {
     return result;
 }
 
-// Bulk version of the above for the Continue Watching row — one query for
-// every in-progress show instead of one per show. Returns a map of
-// entry_id -> number of episodes watched (client already knows the total
-// from media.number_of_episodes, so a count is all that's needed here).
+// Every watched episode across the library as { entry_id, day } — feeds the
+// Stats page's TV watch history.
 async function getTvWatchLog(session) {
     const userId = requireUserId(session);
     const c = getClient();
@@ -950,6 +944,10 @@ async function getTvWatchLog(session) {
     return out;
 }
 
+// Bulk count for the Continue Watching row — one query for every
+// in-progress show instead of one per show. Returns a map of
+// entry_id -> number of episodes watched (client already knows the total
+// from media.number_of_episodes, so a count is all that's needed here).
 async function getWatchedEpisodeCounts(session, entryIds) {
     requireUserId(session);
     if (!entryIds || entryIds.length === 0) return {};
@@ -1659,10 +1657,11 @@ async function getList(session, listId) {
     } catch (err) { console.error('list likes lookup failed (run the likes migration?):', err.message || err); }
 
     let cloneCount = 0;
-    try {
-        const { count } = await getClient().from('list_clones').select('id', { count: 'exact', head: true }).eq('list_id', listId);
-        cloneCount = count || 0;
-    } catch { /* run list-social-migration.sql */ }
+    // Supabase returns errors instead of throwing, so check `error` — the
+    // count is cosmetic, so a failure just shows 0.
+    const { count: clones, error: cloneErr } = await getClient().from('list_clones').select('id', { count: 'exact', head: true }).eq('list_id', listId);
+    if (cloneErr) console.error('list clone count failed:', cloneErr.message);
+    else cloneCount = clones || 0;
     return {
         ...list,
         like_count: likeCount,
@@ -1750,9 +1749,9 @@ async function cloneList(session, listId) {
         const { error } = await getClient().from('list_items').insert(rows);
         if (error) throw error;
     }
-    try {
-        await getClient().from('list_clones').insert({ list_id: listId, cloner_id: userId, new_list_id: created.id });
-    } catch (err) { console.error('recording clone failed (run list-social-migration.sql?):', err.message || err); }
+    // Only feeds the clone counter, so a failure is logged rather than undoing the clone.
+    const { error: cloneLogErr } = await getClient().from('list_clones').insert({ list_id: listId, cloner_id: userId, new_list_id: created.id });
+    if (cloneLogErr) console.error('recording clone failed:', cloneLogErr.message);
     return created;
 }
 
