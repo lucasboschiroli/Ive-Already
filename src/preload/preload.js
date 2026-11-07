@@ -107,6 +107,9 @@ contextBridge.exposeInMainWorld('api', {
     deleteListComment: (commentId) => ipcRenderer.invoke('listComments:delete', { commentId }),
     toggleListLike: (listId) => ipcRenderer.invoke('lists:toggleLike', { listId }),
     reorderMyLists: (listIds) => ipcRenderer.invoke('lists:reorderMine', { listIds }),
+    openSharedList: (token) => ipcRenderer.invoke('lists:openShared', { token }),
+    takePendingListLink: () => ipcRenderer.invoke('deeplink:takeList'),
+    onListLink: (cb) => { const h = () => cb(); ipcRenderer.on('deeplink:list', h); return () => ipcRenderer.removeListener('deeplink:list', h); },
 
     searchTmdb: (query, mediaType, year) => ipcRenderer.invoke('tmdb:search', { query, mediaType, year }),
     searchTmdbFull: (query, mediaType, page) => ipcRenderer.invoke('tmdb:searchFull', { query, mediaType, page }),

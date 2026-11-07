@@ -147,7 +147,23 @@ function showApp() {
     invalidateEntriesCache();
     switchSection('home');
     checkForNewEpisodesInBackground();
+    openPendingListLink(); // a list link clicked before signing in
 }
+
+// ivealready://list/<token> links (see main.js). The token waits in the main
+// process until there's a signed-in session to open it with.
+async function openPendingListLink() {
+    const token = await window.api.takePendingListLink();
+    if (!token) return;
+    try {
+        openListFromAnywhere(await window.api.openSharedList(token));
+    } catch (err) {
+        showToast(`Couldn't open that list: ${String(err.message || err).replace(/^Error invoking remote method '[^']+': (Error: )?/, '')}`, true);
+    }
+}
+window.api.onListLink(() => {
+    if (!authEls.main.classList.contains('hidden')) openPendingListLink(); // otherwise showApp() picks it up
+});
 
 async function refreshAccountAvatar() {
     const session = await window.api.getSession();
@@ -3345,9 +3361,10 @@ function renderListDetail() {
     visBtn.textContent = (list.visibility || 'private') === 'private' ? 'Make this list public' : 'Make this list private';
     // Hover-share popover: link (only once the list is public / link-shared) + Family.
     const linkInput = document.getElementById('listShareLinkInput');
-    const linkable = list.id && ['public', 'link'].includes(list.visibility || 'private');
-    linkInput.value = linkable ? `ivealready://list/${list.id}` : '';
-    linkInput.placeholder = 'Make the list public for a link';
+    // The link carries the list's random share_token, never its id (see list-share-links-migration.sql).
+    const linkable = list.id && list.share_token && ['public', 'link', 'friends'].includes(list.visibility || 'private');
+    linkInput.value = linkable ? `ivealready://list/${list.share_token}` : '';
+    linkInput.placeholder = list.share_token ? 'Make the list public for a link' : 'Share links need a database update';
     document.getElementById('listShareCopyBtn').disabled = !linkable;
     renderListComments(list, editing);
     // "Add a title" only exists while actually editing — opening a list to

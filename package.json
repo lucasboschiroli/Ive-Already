@@ -41,6 +41,14 @@
         "to": ".env"
       }
     ],
+    "protocols": [
+      {
+        "name": "I've Already list link",
+        "schemes": [
+          "ivealready"
+        ]
+      }
+    ],
     "win": {
       "target": "nsis",
       "icon": "build/icon.ico"

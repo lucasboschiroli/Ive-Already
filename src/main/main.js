@@ -7,6 +7,41 @@ const { registerHandlers } = require('./ipc-handlers');
 
 let mainWindow;
 
+// ---- ivealready://list/<token> share links ----
+// Windows starts a new process for a clicked link, with the URL in argv. The
+// single-instance lock below hands it to the window that's already open; on a
+// cold start it's read from this process's own argv. Either way the token
+// waits in pendingListToken until the renderer asks for it (it may still be
+// on the sign-in screen).
+const PROTOCOL = 'ivealready';
+let pendingListToken = null;
+function listTokenFromArgs(args) {
+    for (const a of args || []) {
+        const m = /^ivealready:\/\/list\/([0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12})\/?$/i.exec(String(a));
+        if (m) return m[1];
+    }
+    return null;
+}
+function deliverListToken(token) {
+    if (!token) return;
+    pendingListToken = token;
+    if (mainWindow) mainWindow.webContents.send('deeplink:list');
+}
+
+const isPrimaryInstance = app.requestSingleInstanceLock();
+if (!isPrimaryInstance) {
+    app.quit(); // the open window gets the link via 'second-instance'
+} else {
+    app.on('second-instance', (_evt, argv) => {
+        if (mainWindow) {
+            if (mainWindow.isMinimized()) mainWindow.restore();
+            mainWindow.focus();
+        }
+        deliverListToken(listTokenFromArgs(argv));
+    });
+    pendingListToken = listTokenFromArgs(process.argv);
+}
+
 function createWindow() {
     mainWindow = new BrowserWindow({
         width: 1280,
@@ -65,6 +100,13 @@ function registerWindowControls() {
     ipcMain.handle('window:close', () => mainWindow?.close());
     ipcMain.handle('window:isMaximized', () => mainWindow?.isMaximized() ?? false);
 
+    // Hands over (and forgets) a share-link token waiting from a clicked link.
+    ipcMain.handle('deeplink:takeList', () => {
+        const token = pendingListToken;
+        pendingListToken = null;
+        return token;
+    });
+
     // Trailers link to YouTube, "via JustWatch" links to TMDB's watch page —
     // only allow https URLs on those two known domains through to the OS
     // browser, never anything else the renderer might pass in.
@@ -82,6 +124,11 @@ function registerWindowControls() {
 }
 
 app.whenReady().then(() => {
+    if (!isPrimaryInstance) return;
+    // Registers ivealready:// for this Windows user on each start (the NSIS
+    // installer doesn't — electron-builder's "protocols" only covers macOS/Appx).
+    // Installed app only: a dev run shouldn't point links at node_modules/electron.
+    if (app.isPackaged) app.setAsDefaultProtocolClient(PROTOCOL);
     Menu.setApplicationMenu(null); // no File/Edit/View/Window/Help bar
     sb.init();
     registerHandlers();
