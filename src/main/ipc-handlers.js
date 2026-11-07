@@ -202,6 +202,10 @@ function registerHandlers() {
         return { ok: true };
     });
     ipcMain.handle('auth:deleteAccount', async () => {
+        // Storage files first — once the account is gone there's no session left to delete them with.
+        const session = await sb.getSession();
+        if (!session) return { ok: false, error: 'Not signed in' };
+        await sb.deleteMyStorageFiles(session);
         const { error } = await sb.getClient().rpc('delete_my_account');
         if (error) return { ok: false, error: error.message };
         try { await sb.signOut(); } catch {}

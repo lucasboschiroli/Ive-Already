@@ -1073,12 +1073,40 @@ async function upsertProfile(session, { display_name, avatar_color, avatar_url, 
 
 async function uploadAvatar(session, { fileName, base64Data, contentType }) {
     const userId = requireUserId(session);
-    const path = `${userId}/${Date.now()}-${fileName}`;
+    // Flat "<user id>/<time>-<name>" — strip separators so a file name can't
+    // create subfolders (deleteMyStorageFiles only cleans the top level).
+    const safeName = String(fileName || 'image').replace(/[\\/]/g, '_');
+    const path = `${userId}/${Date.now()}-${safeName}`;
     const buffer = Buffer.from(base64Data, 'base64');
     const { error } = await getClient().storage.from('avatars').upload(path, buffer, { contentType, upsert: true });
     if (error) throw error;
     const { data } = getClient().storage.from('avatars').getPublicUrl(path);
     return data.publicUrl;
+}
+
+// Removes everything this account uploaded to the avatars bucket (avatar +
+// banner history, all under "<user id>/"). Called right before the account is
+// deleted, since nothing in the database cleans up storage files. Returns how
+// many files were removed; never throws, so a storage problem can't block the
+// account deletion itself.
+async function deleteMyStorageFiles(session) {
+    const userId = requireUserId(session);
+    const bucket = getClient().storage.from('avatars');
+    let removed = 0;
+    try {
+        for (;;) {
+            const { data: files, error } = await bucket.list(userId, { limit: 100 });
+            if (error) throw error;
+            if (!files?.length) break;
+            const { data: gone, error: rmErr } = await bucket.remove(files.map((f) => `${userId}/${f.name}`));
+            if (rmErr) throw rmErr;
+            // Storage reports only the files it actually deleted — none means the
+            // bucket's policies don't allow it; stop instead of looping forever.
+            if (!gone?.length) { console.error('avatar cleanup: storage refused to delete files (check the avatars bucket delete policy)'); break; }
+            removed += gone.length;
+        }
+    } catch (err) { console.error('avatar cleanup failed:', err.message || err); }
+    return removed;
 }
 
 // ---- family (real invite/accept relationship — see supabase/schema.sql) ----
@@ -1680,8 +1708,10 @@ async function addListItem(listId, mediaId) {
     const { data: lastRow } = await getClient()
         .from('list_items').select('position').eq('list_id', listId).order('position', { ascending: false }).limit(1).maybeSingle();
     const nextPosition = (lastRow?.position ?? 0) + 1;
+    // ignoreDuplicates: re-adding a title that's already in the list leaves
+    // it where it is (and keeps its note) instead of moving it to the bottom.
     const { error } = await getClient()
-        .from('list_items').upsert({ list_id: listId, media_id: mediaId, position: nextPosition }, { onConflict: 'list_id,media_id' });
+        .from('list_items').upsert({ list_id: listId, media_id: mediaId, position: nextPosition }, { onConflict: 'list_id,media_id', ignoreDuplicates: true });
     if (error) throw error;
     await touchList(listId);
 }
@@ -1737,9 +1767,9 @@ async function cloneList(session, listId) {
     const { data: src, error: srcErr } = await getClient()
         .from('lists').select('id, name, description, genres, is_ranked').eq('id', listId).single();
     if (srcErr) throw srcErr;
-    const { data: srcItems, error: itemsErr } = await getClient()
-        .from('list_items').select('media_id, position, note').eq('list_id', listId).order('position', { ascending: true });
-    if (itemsErr) throw itemsErr;
+    const srcItems = await fetchAllRows((from, to) => getClient()
+        .from('list_items').select('media_id, position, note').eq('list_id', listId)
+        .order('position', { ascending: true }).order('id', { ascending: true }).range(from, to));
 
     const created = await createList(session, {
         name: src.name, description: src.description, genres: src.genres, isRanked: src.is_ranked, visibility: 'private',
@@ -1747,7 +1777,12 @@ async function cloneList(session, listId) {
     if (srcItems.length) {
         const rows = srcItems.map((it) => ({ list_id: created.id, media_id: it.media_id, position: it.position, note: it.note }));
         const { error } = await getClient().from('list_items').insert(rows);
-        if (error) throw error;
+        if (error) {
+            // Don't leave an empty copy behind — delete it (its items cascade) and report the failure.
+            const { error: undoErr } = await getClient().from('lists').delete().eq('id', created.id);
+            if (undoErr) console.error('removing failed clone:', undoErr.message);
+            throw error;
+        }
     }
     // Only feeds the clone counter, so a failure is logged rather than undoing the clone.
     const { error: cloneLogErr } = await getClient().from('list_clones').insert({ list_id: listId, cloner_id: userId, new_list_id: created.id });
@@ -1913,6 +1948,7 @@ module.exports = {
     getProfile,
     upsertProfile,
     uploadAvatar,
+    deleteMyStorageFiles,
     inviteToFamily,
     revokeFamilyInvite,
     listMyFamily,
