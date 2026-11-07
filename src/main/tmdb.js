@@ -285,6 +285,9 @@ function normalizeDetails(d, mediaType) {
         // This (not number_of_episodes) is what "new episodes available"
         // and "every episode watched" checks should compare against.
         aired_episode_count: mediaType === 'tv' ? airedEpisodeCount(d) : null,
+        // Air date of the newest aired episode — lets a "Watched" show tell
+        // whether anything new aired after the date it was finished.
+        last_aired_date: mediaType === 'tv' ? d.last_episode_to_air?.air_date || null : null,
         genres: JSON.stringify((d.genres || []).map((g) => g.name)),
         tmdb_vote_average: d.vote_average ?? null,
         trailer_key: trailer ? trailer.key : null,
@@ -420,6 +423,7 @@ async function getTvEpisodeCount(tmdbId) {
     const data = await tmdbFetch(`/tv/${tmdbId}`);
     return {
         number_of_episodes: airedEpisodeCount(data),
+        last_aired_date: data.last_episode_to_air?.air_date || null,
         number_of_seasons: data.number_of_seasons ?? null,
         // Base /tv/{id} already includes this (no append_to_response
         // needed) — piggyback on the same request to keep season_meta

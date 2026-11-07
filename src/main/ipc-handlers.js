@@ -11,6 +11,14 @@ const omdb = require('./omdb');
 const studios = require('./studios');
 const notifications = require('./notifications');
 
+// For handlers whose queries don't take a session: without this, a signed-out
+// call matches no rows under RLS and silently reports success.
+async function requireSession() {
+    const session = await sb.getSession();
+    if (!session) throw new Error('Not signed in');
+    return session;
+}
+
 function registerHandlers() {
     // ---- auth ----
     ipcMain.handle('auth:signUp', async (_evt, { email, password }) => {
@@ -126,6 +134,7 @@ function registerHandlers() {
     });
 
     ipcMain.handle('family:revokeInvite', async (_evt, { inviteId }) => {
+        await requireSession();
         await sb.revokeFamilyInvite(inviteId);
         return { success: true };
     });
@@ -150,11 +159,13 @@ function registerHandlers() {
     });
 
     ipcMain.handle('family:declineInvite', async (_evt, { inviteId }) => {
+        await requireSession();
         await sb.declineFamilyInvite(inviteId);
         return { success: true };
     });
 
     ipcMain.handle('family:removeMember', async (_evt, { userId }) => {
+        await requireSession();
         await sb.removeFamilyMember(userId);
         return { success: true };
     });
@@ -167,11 +178,13 @@ function registerHandlers() {
     });
 
     ipcMain.handle('lists:rename', async (_evt, { listId, name, description, genres, isRanked, visibility }) => {
+        await requireSession();
         await sb.renameList(listId, { name, description, genres, isRanked, visibility });
         return { success: true };
     });
 
     ipcMain.handle('lists:delete', async (_evt, { listId }) => {
+        await requireSession();
         await sb.deleteList(listId);
         return { success: true };
     });
@@ -295,36 +308,43 @@ function registerHandlers() {
     });
 
     ipcMain.handle('lists:addItem', async (_evt, { listId, mediaId }) => {
+        await requireSession();
         await sb.addListItem(listId, mediaId);
         return { success: true };
     });
 
     ipcMain.handle('lists:removeItem', async (_evt, { listId, mediaId }) => {
+        await requireSession();
         await sb.removeListItem(listId, mediaId);
         return { success: true };
     });
 
     ipcMain.handle('lists:setItemNote', async (_evt, { listId, mediaId, note }) => {
+        await requireSession();
         await sb.setListItemNote(listId, mediaId, note);
         return { success: true };
     });
 
     ipcMain.handle('lists:reorder', async (_evt, { listId, mediaIds }) => {
+        await requireSession();
         await sb.reorderListItems(listId, mediaIds);
         return { success: true };
     });
 
     ipcMain.handle('lists:share', async (_evt, { listId, targetUserId }) => {
+        await requireSession();
         await sb.shareList(listId, targetUserId);
         return { success: true };
     });
 
     ipcMain.handle('lists:unshare', async (_evt, { listId, targetUserId }) => {
+        await requireSession();
         await sb.unshareList(listId, targetUserId);
         return { success: true };
     });
 
     ipcMain.handle('lists:listShares', async (_evt, { listId }) => {
+        await requireSession();
         return sb.listListShares(listId);
     });
 
@@ -345,14 +365,20 @@ function registerHandlers() {
         if (!session) return { listId: null, items: [] };
         return sb.getFavoritesOrder(session);
     });
-    ipcMain.handle('lists:setItemProfileVisible', async (_evt, { listId, mediaId, visible }) => sb.setListItemProfileVisible(listId, mediaId, visible));
+    ipcMain.handle('lists:setItemProfileVisible', async (_evt, { listId, mediaId, visible }) => {
+        await requireSession();
+        return sb.setListItemProfileVisible(listId, mediaId, visible);
+    });
 
     ipcMain.handle('officialLists:isAdmin', async () => {
         const session = await sb.getSession();
         if (!session) return false;
         return sb.isOfficialAdmin();
     });
-    ipcMain.handle('officialLists:addItem', async (_evt, { listId, mediaId }) => sb.addOfficialListItem(listId, mediaId));
+    ipcMain.handle('officialLists:addItem', async (_evt, { listId, mediaId }) => {
+        await requireSession();
+        return sb.addOfficialListItem(listId, mediaId);
+    });
 
     ipcMain.handle('books:series', async () => BOOK_SERIES.map((s) => ({ id: s.id, name: s.name, author: s.author, books: s.books })));
     ipcMain.handle('books:lookupSeries', async (_evt, { id }) => {
@@ -399,6 +425,7 @@ function registerHandlers() {
     });
 
     ipcMain.handle('lists:setVisibility', async (_evt, { listId, visibility }) => {
+        await requireSession();
         await sb.setListVisibility(listId, visibility);
         return { success: true };
     });
@@ -436,6 +463,7 @@ function registerHandlers() {
     });
 
     ipcMain.handle('listComments:delete', async (_evt, { commentId }) => {
+        await requireSession();
         await sb.deleteListComment(commentId);
         return { success: true };
     });
@@ -792,8 +820,14 @@ function registerHandlers() {
                         sb.upsertSeasonMeta(show.mediaId, counts.seasons),
                     ]);
 
+                    // Only revert when an episode aired AFTER the show was
+                    // finished — a show marked Watched straight from the
+                    // status menu (no episodes ticked) is the user's word
+                    // that they've seen it, not a sign of new episodes.
                     const liveCount = counts.number_of_episodes;
-                    if (show.status === 'completed' && liveCount != null && watchedIds.length < liveCount) {
+                    const finishedOn = show.dateFinished;
+                    if (show.status === 'completed' && liveCount != null && watchedIds.length < liveCount
+                        && finishedOn && counts.last_aired_date && counts.last_aired_date > finishedOn) {
                         await sb.upsertEntry(session, show.mediaId, { status: 'in_progress' });
                         updated.push({ title: show.title, newEpisodeCount: liveCount - watchedIds.length });
                     }

@@ -465,6 +465,17 @@ async function fetchAllRows(buildQuery) {
     return all;
 }
 
+// Runs a paged query per chunk of ids and concatenates the rows — a single
+// .in() with thousands of ids overflows the request URL.
+async function fetchAllRowsIn(ids, buildQuery, chunkSize = 150) {
+    const all = [];
+    for (let c = 0; c < ids.length; c += chunkSize) {
+        const chunk = ids.slice(c, c + chunkSize);
+        all.push(...await fetchAllRows((from, to) => buildQuery(chunk, from, to)));
+    }
+    return all;
+}
+
 // Same embedded-join reliability issue as getEntryForMedia above — this is
 // the query that feeds the whole dashboard (Films/Series rows), so a row
 // with a silently-empty `media` here doesn't just look wrong, it vanishes
@@ -640,9 +651,9 @@ async function deleteEntry(session, entryId) {
 }
 
 // Bulk status lookup for posters that aren't from the user's own library
-// (related/similar titles, a person's filmography) — used to draw the
-// small corner status flag on those posters. tmdb_id alone isn't unique
-// across movies/TV, so this groups by media_type. Two plain queries
+// (related/similar titles, a person's filmography, search results) — used
+// to draw the small corner status flag on those posters. tmdb_id alone
+// isn't unique across movies/TV/books/games, so this groups by media_type. Two plain queries
 // (media -> internal ids, then entries filtered by those ids) rather than
 // an embedded join — every other query in this file is a single-table
 // query, and embedded-resource filtering turned out to be unreliable here.
@@ -650,34 +661,36 @@ async function deleteEntry(session, entryId) {
 async function getStatusesForItems(session, items) {
     if (!session || !items || items.length === 0) return {};
     const userId = requireUserId(session);
-    const idsByType = { movie: [], tv: [] };
+    const idsByType = { movie: [], tv: [], book: [], game: [] };
     for (const item of items) {
         if (item && item.tmdb_id != null && idsByType[item.media_type]) {
             idsByType[item.media_type].push(item.tmdb_id);
         }
     }
     const result = {};
-    for (const mediaType of ['movie', 'tv']) {
+    for (const mediaType of Object.keys(idsByType)) {
         const tmdbIds = [...new Set(idsByType[mediaType])];
         if (tmdbIds.length === 0) continue;
 
-        const { data: mediaRows, error: mediaError } = await getClient()
+        const mediaRows = await fetchAllRowsIn(tmdbIds, (chunk, from, to) => getClient()
             .from('media')
             .select('id, tmdb_id')
             .eq('media_type', mediaType)
-            .in('tmdb_id', tmdbIds);
-        if (mediaError) throw mediaError;
-        if (!mediaRows || mediaRows.length === 0) continue;
+            .in('tmdb_id', chunk)
+            .order('id', { ascending: true })
+            .range(from, to));
+        if (mediaRows.length === 0) continue;
 
         const tmdbIdByMediaId = new Map(mediaRows.map((m) => [m.id, m.tmdb_id]));
-        const { data: entryRows, error: entryError } = await getClient()
+        const entryRows = await fetchAllRowsIn(mediaRows.map((m) => m.id), (chunk, from, to) => getClient()
             .from('entries')
             .select('media_id, status')
             .eq('user_id', userId)
-            .in('media_id', mediaRows.map((m) => m.id));
-        if (entryError) throw entryError;
+            .in('media_id', chunk)
+            .order('id', { ascending: true })
+            .range(from, to));
 
-        for (const row of entryRows || []) {
+        for (const row of entryRows) {
             const tmdbId = tmdbIdByMediaId.get(row.media_id);
             if (row.status && tmdbId != null) result[`${mediaType}:${tmdbId}`] = row.status;
         }
@@ -774,12 +787,13 @@ async function listEpisodeLogs(session) {
 // empty `media` here meant a show could quietly get skipped every run).
 async function listTrackedTvEntries(session) {
     const userId = requireUserId(session);
-    const { data: entryRows, error } = await getClient()
+    const entryRows = await fetchAllRows((from, to) => getClient()
         .from('entries')
-        .select('id, media_id, status')
+        .select('id, media_id, status, date_finished')
         .eq('user_id', userId)
-        .in('status', ['completed', 'in_progress']);
-    if (error) throw error;
+        .in('status', ['completed', 'in_progress'])
+        .order('id', { ascending: true })
+        .range(from, to));
     if (entryRows.length === 0) return [];
 
     const mediaIds = [...new Set(entryRows.map((e) => e.media_id))];
@@ -803,6 +817,7 @@ async function listTrackedTvEntries(session) {
             tmdbId: media.tmdb_id,
             title: media.title,
             status: entry.status,
+            dateFinished: entry.date_finished,
         }));
 }
 
@@ -841,9 +856,10 @@ async function setAchievementUnlocked(session, mediaId, achievementId, unlocked)
 
 async function getWatchedEpisodeIds(session, entryId) {
     requireUserId(session);
-    const { data, error } = await getClient().from('watched_episodes').select('episode_id').eq('entry_id', entryId);
-    if (error) throw error;
-    return data.map((r) => r.episode_id);
+    // Paged — long-running shows can have more watched episodes than one request returns.
+    const rows = await fetchAllRows((from, to) => getClient().from('watched_episodes')
+        .select('episode_id').eq('entry_id', entryId).order('id', { ascending: true }).range(from, to));
+    return rows.map((r) => r.episode_id);
 }
 
 // Which season to default to when opening the episode list — the one
@@ -855,15 +871,18 @@ async function getWatchedEpisodeIds(session, entryId) {
 async function getLastWatchedSeason(session, entryId) {
     const watchedIds = await getWatchedEpisodeIds(session, entryId);
     if (watchedIds.length === 0) return null;
-    const { data, error } = await getClient()
+    const rows = await fetchAllRowsIn(watchedIds, (chunk, from, to) => getClient()
         .from('episodes')
         .select('season_number, episode_number')
-        .in('id', watchedIds)
-        .order('season_number', { ascending: false })
-        .order('episode_number', { ascending: false })
-        .limit(1);
-    if (error) throw error;
-    return data[0]?.season_number ?? null;
+        .in('id', chunk)
+        .order('id', { ascending: true })
+        .range(from, to));
+    let best = null;
+    for (const ep of rows) {
+        if (!best || ep.season_number > best.season_number
+            || (ep.season_number === best.season_number && ep.episode_number > best.episode_number)) best = ep;
+    }
+    return best?.season_number ?? null;
 }
 
 // Bulk version of the above for the Continue Watching row — one query for
@@ -873,19 +892,21 @@ async function getLastWatchedSeason(session, entryId) {
 async function getLastWatchedSeasons(session, entryIds) {
     requireUserId(session);
     if (!entryIds || entryIds.length === 0) return {};
-    const { data: watchedRows, error } = await getClient()
+    const watchedRows = await fetchAllRowsIn(entryIds, (chunk, from, to) => getClient()
         .from('watched_episodes')
         .select('entry_id, episode_id')
-        .in('entry_id', entryIds);
-    if (error) throw error;
+        .in('entry_id', chunk)
+        .order('id', { ascending: true })
+        .range(from, to), 100);
     if (watchedRows.length === 0) return {};
 
     const episodeIds = [...new Set(watchedRows.map((r) => r.episode_id))];
-    const { data: episodeRows, error: episodeError } = await getClient()
+    const episodeRows = await fetchAllRowsIn(episodeIds, (chunk, from, to) => getClient()
         .from('episodes')
         .select('id, season_number, episode_number')
-        .in('id', episodeIds);
-    if (episodeError) throw episodeError;
+        .in('id', chunk)
+        .order('id', { ascending: true })
+        .range(from, to));
     const episodeById = new Map((episodeRows || []).map((e) => [e.id, e]));
 
     const bestByEntry = {};
@@ -917,7 +938,7 @@ async function getTvWatchLog(session) {
     for (let i = 0; i < ids.length; i += 200) {
         const chunk = ids.slice(i, i + 200);
         for (let from = 0; ; from += 1000) { // PostgREST returns max 1000 rows per request
-            const { data, error } = await c.from('watched_episodes').select('*').in('entry_id', chunk).range(from, from + 999);
+            const { data, error } = await c.from('watched_episodes').select('*').in('entry_id', chunk).order('id', { ascending: true }).range(from, from + 999);
             if (error) throw error;
             (data || []).forEach((r) => {
                 const at = r.watched_at || r.created_at || r.updated_at || null;
@@ -937,7 +958,7 @@ async function getWatchedEpisodeCounts(session, entryIds) {
         const chunk = entryIds.slice(c, c + 100);
         let from = 0;
         for (;;) {
-            const { data, error } = await getClient().from('watched_episodes').select('entry_id').in('entry_id', chunk).range(from, from + 999);
+            const { data, error } = await getClient().from('watched_episodes').select('entry_id').in('entry_id', chunk).order('id', { ascending: true }).range(from, from + 999);
             if (error) throw error;
             for (const row of data) counts[row.entry_id] = (counts[row.entry_id] || 0) + 1;
             if (data.length < 1000) break;
@@ -1067,6 +1088,8 @@ async function uploadAvatar(session, { fileName, base64Data, contentType }) {
 // Whichever family this account actually belongs to — as owner, or as an
 // accepted member of someone else's — plus its name. Null if they've never
 // been part of one (the normal, unremarkable case for a solo account).
+// maybeSingle() is safe: families.owner_id and family_members.user_id are
+// both UNIQUE, so an account can only ever be in one family.
 async function getMyFamily(session) {
     const userId = requireUserId(session);
     const { data: owned, error: ownErr } = await getClient().from('families').select('id, name').eq('owner_id', userId).maybeSingle();
@@ -1083,6 +1106,8 @@ async function getMyFamily(session) {
 // create one, with a name they picked, matching Steam's own setup flow.
 async function createFamily(session, name) {
     const userId = requireUserId(session);
+    // Checked up front so the user gets a clear message instead of a UNIQUE-constraint error.
+    if (await getMyFamily(session)) throw new Error("You're already in a family — leave it before creating a new one");
     const { data: created, error: insErr } = await getClient()
         .from('families').insert({ owner_id: userId, name: name.trim() }).select('id, name').single();
     if (insErr) throw insErr;
@@ -1142,10 +1167,16 @@ async function acceptFamilyInvite(session, inviteId) {
         .from('family_invites').select('family_id').eq('id', inviteId).single();
     if (invErr) throw invErr;
 
-    const { error: memErr } = await getClient()
-        .from('family_members')
-        .insert({ family_id: invite.family_id, user_id: userId, email: session.user.email });
-    if (memErr) throw memErr;
+    // One family per account (family_members.user_id is UNIQUE) — checked
+    // here so the user gets a clear message instead of a constraint error.
+    const current = await getMyFamily(session);
+    if (current && current.id !== invite.family_id) throw new Error('Leave your current family before joining another');
+    if (!current) {
+        const { error: memErr } = await getClient()
+            .from('family_members')
+            .insert({ family_id: invite.family_id, user_id: userId, email: session.user.email });
+        if (memErr) throw memErr;
+    }
 
     const { error: updErr } = await getClient().from('family_invites').update({ status: 'accepted' }).eq('id', inviteId);
     if (updErr) throw updErr;
@@ -1227,9 +1258,10 @@ async function touchList(listId) {
 async function attachListCounts(lists) {
     if (lists.length === 0) return [];
     const listIds = lists.map((l) => l.id);
-    const { data: items, error } = await getClient()
-        .from('list_items').select('list_id, media_id, added_at, position').in('list_id', listIds);
-    if (error) throw error;
+    // Paged — official lists alone can hold more items than one request returns.
+    const items = await fetchAllRowsIn(listIds, (chunk, from, to) => getClient()
+        .from('list_items').select('list_id, media_id, added_at, position').in('list_id', chunk)
+        .order('id', { ascending: true }).range(from, to));
 
     const counts = {};
     for (const it of items) counts[it.list_id] = (counts[it.list_id] || 0) + 1;
@@ -1239,9 +1271,8 @@ async function attachListCounts(lists) {
     let postersById = {};
     if (items.length) {
         const mediaIds = [...new Set(items.map((it) => it.media_id))];
-        const { data: mediaRows, error: mediaErr } = await getClient()
-            .from('media').select('id, poster_path').in('id', mediaIds);
-        if (mediaErr) throw mediaErr;
+        const mediaRows = await fetchAllRowsIn(mediaIds, (chunk, from, to) => getClient()
+            .from('media').select('id, poster_path').in('id', chunk).order('id', { ascending: true }).range(from, to));
         postersById = Object.fromEntries(mediaRows.map((m) => [m.id, m.poster_path]));
     }
     const previewsByList = {};
@@ -1582,23 +1613,28 @@ async function getList(session, listId) {
 
     // Manual drag-to-reorder position is now the one true order — a ranked
     // list just additionally shows that order as numbered badges.
-    const { data: itemRows, error: itemErr } = await getClient()
-        .from('list_items').select('id, media_id, added_at, position, note, show_on_profile').eq('list_id', listId).order('position', { ascending: true });
-    if (itemErr) throw itemErr;
+    // Paged (big official lists exceed one request); id breaks position ties.
+    const itemRows = await fetchAllRows((from, to) => getClient()
+        .from('list_items').select('id, media_id, added_at, position, note, show_on_profile').eq('list_id', listId)
+        .order('position', { ascending: true }).order('id', { ascending: true }).range(from, to));
 
     let items = [];
     let watchedCount = 0;
     if (itemRows.length) {
         const mediaIds = itemRows.map((r) => r.media_id);
-        const { data: mediaRows, error: mediaErr } = await getClient()
-            .from('media').select('id, tmdb_id, media_type, title, poster_path, backdrop_path, overview, release_date, genres').in('id', mediaIds);
-        if (mediaErr) throw mediaErr;
+        const mediaRows = await fetchAllRowsIn(mediaIds, (chunk, from, to) => getClient()
+            .from('media').select('id, tmdb_id, media_type, title, poster_path, backdrop_path, overview, release_date, genres')
+            .in('id', chunk).order('id', { ascending: true }).range(from, to));
         const mediaById = Object.fromEntries(mediaRows.map((m) => [m.id, m]));
 
         // Cross-reference this user's own entries so each row can show
         // whether they've actually watched/read/played it already.
-        const { data: entryRows } = await getClient()
-            .from('entries').select('media_id, status').eq('user_id', userId).in('media_id', mediaIds);
+        let entryRows = [];
+        try {
+            entryRows = await fetchAllRowsIn(mediaIds, (chunk, from, to) => getClient()
+                .from('entries').select('media_id, status').eq('user_id', userId).in('media_id', chunk)
+                .order('id', { ascending: true }).range(from, to));
+        } catch (err) { console.error('list entry statuses lookup failed:', err.message || err); }
         const statusByMediaId = Object.fromEntries((entryRows || []).map((e) => [e.media_id, e.status]));
 
         items = itemRows

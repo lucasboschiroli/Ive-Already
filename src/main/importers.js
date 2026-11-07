@@ -186,7 +186,8 @@ async function runLetterboxd(session, opts, send) {
                 if (!existing || existing.status === 'planned' || !existing.status) fields.status = 'completed';
                 if (dates.length && !existing?.date_finished) fields.date_finished = dates[dates.length - 1];
                 if (f.rating && !existing?.rating) fields.rating = f.rating * 2;
-                else if (f.liked && !f.rating && !existing?.rating && !existing?.is_favorite) fields.is_favorite = true;
+                // A Letterboxd like is a favorite whether or not the film was also rated.
+                if (f.liked && !existing?.is_favorite) fields.is_favorite = true;
                 if (f.review && !existing?.review) fields.review = f.review;
             } else if (f.watchlist && !existing) {
                 fields.status = 'planned';

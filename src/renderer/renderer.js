@@ -1333,7 +1333,7 @@ async function renderProfileActivityTab(container) {
     }
     events.sort((a, b) => new Date(b.at || 0) - new Date(a.at || 0));
     if (!events.length) {
-        feed.innerHTML = `<p class="profile-tab-empty">${profileActivitySub === 'friends' ? 'No recent activity — follow members from the main search to see what they watch.' : profileActivitySub === 'family' ? 'No recent activity from your family.' : 'No recent activity'}</p>`;
+        feed.innerHTML = `<p class="profile-tab-empty">${profileActivitySub === 'friends' ? 'No recent activity — follow members from the main search to see what they watch once they follow you back.' : profileActivitySub === 'family' ? 'No recent activity from your family.' : 'No recent activity'}</p>`;
         return;
     }
     const shown = events.slice(0, profileActivityShown);
@@ -5942,11 +5942,13 @@ async function setupEpisodes(details, entryRef, numberedSeasons, onEntryCreated,
         watchedIds = new Set(await window.api.getWatchedEpisodes(entryRef.current.id));
     }
 
-    // A show marked Watched only stays Watched while every episode actually
-    // is — if a new season/episode aired since then, watchedIds will now be
-    // short of the current total, so drop it back to Watching automatically
-    // rather than silently leaving it marked complete.
-    if (entryRef.current?.status === 'completed' && details.aired_episode_count && watchedIds.size < details.aired_episode_count) {
+    // A show marked Watched drops back to Watching when a new episode has
+    // aired since the date it was finished. Comparing against the finish
+    // date (not just the watched count) keeps a show marked Watched from
+    // the status menu, with no episodes ticked, from reverting every time.
+    const finishedOn = entryRef.current?.date_finished;
+    if (entryRef.current?.status === 'completed' && details.aired_episode_count && watchedIds.size < details.aired_episode_count
+        && finishedOn && details.last_aired_date && details.last_aired_date > finishedOn) {
         try {
             entryRef.current = await upsertEntryAndInvalidate(details.mediaId, { status: 'in_progress' });
             onEntryCreated?.();
