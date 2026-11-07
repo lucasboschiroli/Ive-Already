@@ -24,7 +24,15 @@ npm start
 
 ### Database
 
-All data lives in Supabase (Postgres + row-level security). Run the `*.sql` files in the project root in the Supabase SQL editor — the base schema in `supabase/` first, then each `*-migration.sql` (lists, social, diary logs, favorites, publishers/studios, official lists, game achievements, `delete-account-migration.sql`, …). Run any new migration **before** using the feature that needs it.
+All data lives in Supabase (Postgres + row-level security). `supabase/schema.sql` is a dump of the live project's `public` schema — tables, functions, triggers and access rules. To set up a new project, run it in the Supabase SQL editor, then create the public `avatars` storage bucket (not part of the dump).
+
+Database changes go in a new `supabase/*-migration.sql` file. Run it in the SQL editor **before** using the feature that needs it, then refresh the schema file:
+
+```bash
+npx supabase db dump --remote=ekswnfwrntjkizglqwjl -s public -f supabase/schema.sql
+```
+
+The dump needs Docker Desktop running and `npx supabase login` once.
 
 ## Features
 

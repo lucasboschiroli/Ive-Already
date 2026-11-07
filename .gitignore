@@ -2,3 +2,4 @@ node_modules
 dist
 *.sqlite3
 .env
+supabase/.temp
