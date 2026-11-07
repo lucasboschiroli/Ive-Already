@@ -62,7 +62,8 @@
     "publish": {
       "provider": "github",
       "owner": "lucasboschiroli",
-      "repo": "Ive-Already"
+      "repo": "Ive-Already",
+      "releaseType": "release"
     }
   }
 }
