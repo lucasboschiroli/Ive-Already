@@ -750,7 +750,43 @@ function registerHandlers() {
     ipcMain.handle('studio:listFollowed', async () => { const s = await sb.getSession(); return s ? sb.listFollowedStudios(s) : []; });
 
     // ---- episodes (TV progress) ----
-    ipcMain.handle('episodes:getSeason', async (_evt, { mediaId, tmdbId, seasonNumber }) => {
+    ipcMain.handle('episodes:getSeason', async (_evt, { mediaId, tmdbId, seasonNumber }) => seasonEpisodes(mediaId, tmdbId, seasonNumber));
+
+    // Bulk progress: "I've watched N episodes" or "watched up to S·E". Marks the
+    // first N aired episodes (in season/episode order) and unmarks everything
+    // after them, so the result is exactly that progress. dryRun only reports
+    // what would change, so the UI can confirm before unmarking anything.
+    ipcMain.handle('episodes:setProgress', async (_evt, { entryId, mediaId, tmdbId, seasons, count, upTo, dryRun }) => {
+        const session = await requireSession();
+        const today = new Date().toISOString().slice(0, 10);
+        const numbered = [...new Set((seasons || []).filter((s) => s > 0))].sort((a, b) => a - b);
+        const perSeason = await pool(numbered, 4, (s) => seasonEpisodes(mediaId, tmdbId, s));
+        const aired = perSeason.flat()
+            .filter((ep) => ep.air_date && ep.air_date <= today)
+            .sort((a, b) => a.season_number - b.season_number || a.episode_number - b.episode_number);
+        let target = Number.isFinite(count) ? count : 0;
+        if (upTo) target = aired.findIndex((ep) => ep.season_number === upTo.season && ep.episode_number === upTo.episode) + 1;
+        target = Math.max(0, Math.min(target, aired.length));
+        const watched = new Set(await sb.getWatchedEpisodeIds(session, entryId));
+        const add = aired.slice(0, target).filter((ep) => !watched.has(ep.id)).map((ep) => ep.id);
+        const remove = aired.slice(target).filter((ep) => watched.has(ep.id)).map((ep) => ep.id);
+        const summary = { aired: aired.length, target, adding: add.length, removing: remove.length };
+        if (dryRun) return summary;
+        await sb.setEpisodesWatched(session, entryId, add, remove);
+        return { ...summary, watchedIds: await sb.getWatchedEpisodeIds(session, entryId) };
+    });
+
+    // Runs fn over items with at most n in flight; results in input order.
+    async function pool(items, n, fn) {
+        const out = new Array(items.length);
+        let next = 0;
+        await Promise.all(Array.from({ length: Math.min(n, items.length) }, async () => {
+            while (next < items.length) { const i = next++; out[i] = await fn(items[i]); }
+        }));
+        return out;
+    }
+
+    async function seasonEpisodes(mediaId, tmdbId, seasonNumber) {
         let episodes = await sb.getEpisodes(mediaId, seasonNumber);
         // Re-fetch a season that may still be airing, not just an uncached one —
         // otherwise episodes announced after the first visit never show up and
@@ -769,7 +805,7 @@ function registerHandlers() {
             }
         }
         return episodes;
-    });
+    }
 
     ipcMain.handle('episodes:toggleWatched', async (_evt, { entryId, episodeId, watched }) => {
         const session = await sb.getSession();

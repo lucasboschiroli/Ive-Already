@@ -615,6 +615,15 @@ select { display: none; } /* native selects fully replaced by .custom-select com
 .episode-title { font-size: 1.3rem; font-weight: 600; }
 .episode-meta { font-size: 1.1rem; color: var(--gray); }
 .episode-checkbox { width: 22px; height: 22px; accent-color: var(--accent); cursor: pointer; flex-shrink: 0; }
+.episode-actions { display: flex; align-items: center; gap: 1.2rem; flex-shrink: 0; }
+/* "Up to here" only shows on the row you're pointing at, so the list stays calm */
+.episode-upto { visibility: hidden; background: none; border: 1.5px solid #ccc; border-radius: 14px; padding: 0.3rem 1rem; font: inherit; font-size: 1.1rem; font-weight: 600; color: #1a1a1a; cursor: pointer; white-space: nowrap; }
+.episode-row:hover .episode-upto, .episode-upto:focus-visible, .episode-upto:disabled { visibility: visible; }
+.episode-upto:hover { border-color: var(--accent); color: var(--accent); }
+.episode-upto:disabled { opacity: 0.5; cursor: default; }
+.bp-row.ep-progress-set { align-items: center; }
+.ep-progress-set .bp-field { flex-direction: row; align-items: center; gap: 1rem; }
+.ep-progress-unit { font-size: 1.15rem; font-weight: 600; color: var(--gray); }
 
 /* ---------------- person page ---------------- */
 .person-page-layout { display: grid; grid-template-columns: 220px 1fr; gap: 3rem; margin-bottom: 2rem; }

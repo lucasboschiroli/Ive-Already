@@ -759,6 +759,27 @@ async function toggleWatchedEpisode(session, entryId, episodeId, watched) {
     return getWatchedEpisodeIds(session, entryId);
 }
 
+// Bulk version of toggleWatchedEpisode, for setting progress in one go
+// ("I've watched 1050 episodes"). Writes in batches instead of a request per
+// episode. Bulk-added episodes get no per-episode diary rows — they weren't
+// watched today; unmarked ones lose theirs, same as unticking one by one.
+async function setEpisodesWatched(session, entryId, addIds, removeIds) {
+    requireUserId(session); // RLS also enforces this via entry ownership
+    const c = getClient();
+    for (let i = 0; i < addIds.length; i += 500) {
+        const rows = addIds.slice(i, i + 500).map((episodeId) => ({ entry_id: entryId, episode_id: episodeId }));
+        const { error } = await c.from('watched_episodes').upsert(rows, { onConflict: 'entry_id,episode_id', ignoreDuplicates: true });
+        if (error) throw error;
+    }
+    for (let i = 0; i < removeIds.length; i += 150) {
+        const chunk = removeIds.slice(i, i + 150);
+        const { error } = await c.from('watched_episodes').delete().eq('entry_id', entryId).in('episode_id', chunk);
+        if (error) throw error;
+        const { error: logErr } = await c.from('entry_logs').delete().eq('entry_id', entryId).in('episode_id', chunk);
+        if (logErr) console.error('episode diary cleanup:', logErr.message);
+    }
+}
+
 // Ticking an episode adds a diary row dated today (local time); unticking removes it.
 // Skipped silently if episode-diary-migration.sql hasn't been run yet.
 function localToday() {
@@ -2033,6 +2054,7 @@ module.exports = {
     upsertEpisodes,
     getEpisodes,
     toggleWatchedEpisode,
+    setEpisodesWatched,
     getWatchedEpisodeIds,
     getUnlockedAchievements,
     getUnlockedCounts,

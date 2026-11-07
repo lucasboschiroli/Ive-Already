@@ -5019,6 +5019,11 @@ async function openDetails(tmdbId, mediaType, { recordHistory = true } = {}) {
                             <span id="progressText"></span>
                         </div>
                         <div class="progress-bar"><div class="progress-fill" id="progressFill" style="width:0%"></div></div>
+                        <div class="bp-row ep-progress-set">
+                            <label class="bp-field"><span>I've watched</span><input type="number" min="0" class="bp-input" id="epProgressInput" placeholder="0"></label>
+                            <span class="ep-progress-unit">episodes</span>
+                            <button type="button" class="bp-btn" id="epProgressSave">Update</button>
+                        </div>
                     </div>
                     <div class="content-box">
                         <div class="episodes-header">
@@ -5296,6 +5301,7 @@ async function openDetails(tmdbId, mediaType, { recordHistory = true } = {}) {
                     if (await panelApi?.applyStatus(newStatus, rewatchISO)) {
                         paintStatusButtons();
                         showToast('Saved!');
+                        offerTickAllEpisodes(newStatus);
                         return;
                     }
                     const fields = { status: newStatus };
@@ -5320,6 +5326,7 @@ async function openDetails(tmdbId, mediaType, { recordHistory = true } = {}) {
                     if (fields.date_started) dateStartedInput.setISO(fields.date_started);
                     paintStatusButtons();
                     showToast('Saved!');
+                    offerTickAllEpisodes(newStatus);
                 } catch (err) {
                     console.error('Failed to save status:', err);
                     showToast(`Couldn't save status: ${err.message}`, true);
@@ -5359,6 +5366,19 @@ async function openDetails(tmdbId, mediaType, { recordHistory = true } = {}) {
         host.querySelectorAll('.studio-link').forEach((a) => a.addEventListener('click', () => openStudio(a.dataset.kind, Number(a.dataset.id))));
     }).catch(() => {});
     let panelApi = null;
+    let episodesApi = null; // TV only, set once setupEpisodes has loaded
+    // Marking a show Watched doesn't tick its episodes by itself — offer to,
+    // so the progress bar (and Continue Watching) match the status.
+    async function offerTickAllEpisodes(newStatus) {
+        if (newStatus !== 'completed' || !episodesApi) return;
+        const aired = details.aired_episode_count || 0;
+        const left = aired - episodesApi.watchedCount();
+        if (left <= 0) return;
+        const ok = await showConfirm(`Also mark all ${aired} aired episodes as watched? ${left} aren't ticked yet.`, { confirmLabel: 'Mark all' });
+        if (!ok) return;
+        try { await episodesApi.markAllAired(); }
+        catch (err) { console.error('Failed to mark all episodes:', err); showToast(`Couldn't mark the episodes: ${err.message}`, true); }
+    }
     paintStatusButtons();
     setupListAddDropdown(details);
     if (details.media_type === 'game') {
@@ -5398,7 +5418,9 @@ async function openDetails(tmdbId, mediaType, { recordHistory = true } = {}) {
     });
 
     if (details.media_type === 'tv' && numberedSeasons.length) {
-        setupEpisodes(details, entryRef, numberedSeasons, paintStatusButtons, dateStartedInput, dateFinishedInput);
+        setupEpisodes(details, entryRef, numberedSeasons, paintStatusButtons, dateStartedInput, dateFinishedInput)
+            .then((api) => { episodesApi = api; })
+            .catch((err) => console.error('Failed to set up episodes:', err));
     }
 }
 
@@ -6195,8 +6217,72 @@ async function setupEpisodes(details, entryRef, numberedSeasons, onEntryCreated,
         const pct = totalEpisodes ? Math.round((totalWatched / totalEpisodes) * 100) : 0;
         document.getElementById('progressFill').style.width = `${pct}%`;
         document.getElementById('progressText').textContent = `${totalWatched} of ${totalEpisodes} episodes watched`;
+        const input = document.getElementById('epProgressInput');
+        if (input && document.activeElement !== input) input.value = totalWatched || '';
     }
     updateProgress(watchedIds.size, details.aired_episode_count || 0);
+
+    // Same status/date auto-advance as ticking episodes one by one (see the
+    // checkbox handler below): first progress starts it, all aired finishes it.
+    async function autoAdvance(before) {
+        const fields = {};
+        const today = todayISOLocal();
+        const st = entryRef.current.status;
+        const aired = details.aired_episode_count;
+        if (aired && watchedIds.size >= aired) {
+            if (st !== 'completed' && st !== 'rewatched') { fields.status = 'completed'; if (!entryRef.current.date_finished) fields.date_finished = today; }
+        } else if (watchedIds.size > 0) {
+            if (st === 'planned' || (st === 'completed' && watchedIds.size < before)) fields.status = 'in_progress';
+        }
+        if (watchedIds.size > 0 && !entryRef.current.date_started && !dateStartedInput?.getISO()) fields.date_started = today;
+        if (!Object.keys(fields).length) return;
+        entryRef.current = await upsertEntryAndInvalidate(details.mediaId, fields);
+        if (fields.date_started) dateStartedInput?.setISO(fields.date_started);
+        if (fields.date_finished) dateFinishedInput?.setISO(fields.date_finished);
+        onEntryCreated?.();
+    }
+
+    // Bulk progress — "I've watched N episodes" or "watched up to this one".
+    // Marks the first N aired episodes across every season (fetching seasons
+    // as needed) and unmarks anything after, after confirming that part.
+    async function setProgress({ count, upTo, confirmed = false }) {
+        if (!entryRef.current) {
+            entryRef.current = await upsertEntryAndInvalidate(details.mediaId, { status: 'in_progress' });
+            onEntryCreated?.();
+        }
+        const args = { entryId: entryRef.current.id, mediaId: details.mediaId, tmdbId: details.tmdb_id,
+            seasons: numberedSeasons.map((s) => s.season_number), count, upTo };
+        const plan = await window.api.setEpisodeProgress({ ...args, dryRun: true });
+        if (!plan.adding && !plan.removing) { showToast('Already up to date'); return false; }
+        if (plan.removing && !confirmed) {
+            const ok = await showConfirm(`This marks ${plan.target} episode${plan.target === 1 ? '' : 's'} as watched and unmarks ${plan.removing} after ${plan.target === 1 ? 'it' : 'them'}. Continue?`, { confirmLabel: 'Update' });
+            if (!ok) return false;
+        }
+        const before = watchedIds.size;
+        const res = await window.api.setEpisodeProgress(args);
+        watchedIds = new Set(res.watchedIds);
+        invalidateEntriesCache(); // episode counts feed the Continue Watching bars
+        updateProgress(watchedIds.size, details.aired_episode_count || 0);
+        await autoAdvance(before);
+        loadSeason(numberedSeasons[currentSeasonIdx].season_number);
+        showToast(`${watchedIds.size} episode${watchedIds.size === 1 ? '' : 's'} watched`);
+        return true;
+    }
+
+    const progressBtn = document.getElementById('epProgressSave');
+    const progressInput = document.getElementById('epProgressInput');
+    const submitProgress = async () => {
+        const n = parseInt(progressInput.value, 10);
+        if (!Number.isFinite(n) || n < 0) { showToast('Enter how many episodes you\'ve watched', true); return; }
+        progressBtn.disabled = true;
+        progressBtn.textContent = 'Updating…'; // a long show can mean fetching a couple dozen seasons first
+        try { await setProgress({ count: n }); }
+        catch (err) { console.error('Failed to set progress:', err); showToast(`Couldn't update: ${err.message}`, true); }
+        progressBtn.disabled = false;
+        progressBtn.textContent = 'Update';
+    };
+    progressBtn?.addEventListener('click', submitProgress);
+    progressInput?.addEventListener('keydown', (ev) => { if (ev.key === 'Enter') submitProgress(); });
 
     function selectSeason(idx) {
         currentSeasonIdx = idx;
@@ -6220,15 +6306,34 @@ async function setupEpisodes(details, entryRef, numberedSeasons, onEntryCreated,
         const list = document.getElementById('episodesList');
         list.innerHTML = '<div class="loading-state"><div class="loading-spinner"></div><p class="loading-text">Loading…</p></div>';
         const episodes = await window.api.getSeasonEpisodes(details.mediaId, details.tmdb_id, seasonNumber);
+        const today = todayISOLocal();
         list.innerHTML = episodes.map((ep) => `
             <div class="episode-row">
                 <div>
                     <div class="episode-title">${seasonNumber}x${String(ep.episode_number).padStart(2, '0')} – ${escapeHtml(ep.name || '')}</div>
                     <div class="episode-meta">${ep.air_date ? 'Air Date: ' + formatDateDMY(ep.air_date) : ''}</div>
                 </div>
-                <input type="checkbox" class="episode-checkbox" data-episode-id="${ep.id}" ${watchedIds.has(ep.id) ? 'checked' : ''}>
+                <div class="episode-actions">
+                    ${ep.air_date && ep.air_date <= today ? `<button type="button" class="episode-upto" data-season="${seasonNumber}" data-episode="${ep.episode_number}" title="Mark every episode up to this one as watched (and the ones after as not watched)">Up to here</button>` : ''}
+                    <input type="checkbox" class="episode-checkbox" data-episode-id="${ep.id}" ${watchedIds.has(ep.id) ? 'checked' : ''}>
+                </div>
             </div>
         `).join('');
+
+        list.querySelectorAll('.episode-upto').forEach((btn) => {
+            btn.addEventListener('click', async () => {
+                list.querySelectorAll('.episode-upto').forEach((b) => { b.disabled = true; });
+                btn.textContent = 'Updating…';
+                try {
+                    await setProgress({ upTo: { season: Number(btn.dataset.season), episode: Number(btn.dataset.episode) } });
+                } catch (err) {
+                    console.error('Failed to set progress:', err);
+                    showToast(`Couldn't update: ${err.message}`, true);
+                }
+                list.querySelectorAll('.episode-upto').forEach((b) => { b.disabled = false; });
+                btn.textContent = 'Up to here';
+            });
+        });
 
         list.querySelectorAll('.episode-checkbox').forEach((cb) => {
             cb.addEventListener('change', async () => {
@@ -6282,6 +6387,12 @@ async function setupEpisodes(details, entryRef, numberedSeasons, onEntryCreated,
     }
 
     selectSeason(initialSeasonIdx);
+
+    // Lets the status menu offer "tick every aired episode" when a show is marked Watched.
+    return {
+        watchedCount: () => watchedIds.size,
+        markAllAired: () => setProgress({ count: details.aired_episode_count || 0, confirmed: true }),
+    };
 }
 
 // ==================== PERSON PAGE ====================

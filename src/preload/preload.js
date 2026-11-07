@@ -129,6 +129,7 @@ contextBridge.exposeInMainWorld('api', {
     toggleEpisodeWatched: (entryId, episodeId, watched) =>
         ipcRenderer.invoke('episodes:toggleWatched', { entryId, episodeId, watched }),
     getWatchedEpisodes: (entryId) => ipcRenderer.invoke('episodes:getWatched', { entryId }),
+    setEpisodeProgress: (args) => ipcRenderer.invoke('episodes:setProgress', args),
     getLastWatchedSeason: (entryId) => ipcRenderer.invoke('episodes:getLastWatchedSeason', { entryId }),
     checkForNewEpisodes: () => ipcRenderer.invoke('app:checkForNewEpisodes'),
     showNotification: (title, body) => ipcRenderer.invoke('app:showNotification', { title, body }),
