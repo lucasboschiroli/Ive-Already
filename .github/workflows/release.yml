@@ -3,13 +3,16 @@ name: Release
 on:
   push:
     tags: ['v*']
+# The built-in GITHUB_TOKEN is read-only by default; publishing needs to create the release.
+permissions:
+  contents: write
 jobs:
   win:
     runs-on: windows-latest
     steps:
       - uses: actions/checkout@v4
       - uses: actions/setup-node@v4
-        with: { node-version: 20 }
+        with: { node-version: 22 } # Electron 44 needs Node >= 22.12
       - run: npm ci
       - name: Write .env from secrets
         shell: bash
