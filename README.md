@@ -21,6 +21,7 @@ npm start
 | `RAWG_API_KEY` | for games | rawg.io/apidocs |
 | `OMDB_API_KEY` | optional | omdbapi.com (IMDb / Rotten Tomatoes numbers) |
 | `STEAM_API_KEY` | optional | steamcommunity.com/dev/apikey (Steam import; your Steam profile must be public) |
+| `TMDB_WATCH_REGION` | optional | two-letter country code for "where to watch" (default `US`) |
 
 ### Database
 
