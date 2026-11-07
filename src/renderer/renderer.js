@@ -5082,6 +5082,8 @@ async function openDetails(tmdbId, mediaType, { recordHistory = true } = {}) {
         initialISO: entry?.date_finished || null,
         onChange: async (iso) => {
             try {
+                // With a diary, the date belongs to a diary row — edit that instead.
+                if (await panelApi?.editEntryDate('date_finished', iso)) { paintStatusButtons(); showToast('Saved!'); return; }
                 const fields = { date_finished: iso };
                 // Setting a finish date means you actually finished it —
                 // auto-advance to Watched/Read/Played, same idea as the
@@ -5103,6 +5105,7 @@ async function openDetails(tmdbId, mediaType, { recordHistory = true } = {}) {
         initialISO: entry?.date_rewatched || null,
         onChange: async (iso) => {
             try {
+                if (await panelApi?.editEntryDate('date_rewatched', iso)) { paintStatusButtons(); showToast('Saved!'); return; }
                 entryRef.current = await upsertEntryAndInvalidate(details.mediaId, { date_rewatched: iso });
                 showToast('Saved!');
             } catch (err) {
@@ -5118,6 +5121,7 @@ async function openDetails(tmdbId, mediaType, { recordHistory = true } = {}) {
             initialISO: entry?.date_started || null,
             onChange: async (iso) => {
                 try {
+                    if (await panelApi?.editEntryDate('date_started', iso)) { paintStatusButtons(); showToast('Saved!'); return; }
                     const fields = { date_started: iso };
                     if (iso && (!entryRef.current || entryRef.current.status === 'planned')) fields.status = 'in_progress';
                     entryRef.current = await upsertEntryAndInvalidate(details.mediaId, fields);
@@ -5325,6 +5329,7 @@ async function openDetails(tmdbId, mediaType, { recordHistory = true } = {}) {
                 try {
                     await deleteEntryAndInvalidate(entryRef.current.id);
                     entryRef.current = null;
+                    panelApi?.refresh(); // its logs went with the entry
                     paintStatusButtons();
                     setupStarRating(0);
                     document.getElementById('reviewBox').value = '';
@@ -5417,16 +5422,19 @@ function setupDetailPanel({ details, entryRef, dateStartedInput, dateFinishedInp
         const d = new Date(`${iso.slice(0, 10)}T12:00:00`);
         return Number.isNaN(d.getTime()) ? 'No date' : d.toLocaleDateString('en-GB', { day: 'numeric', month: 'short', year: 'numeric' });
     };
-    // Real logs, or — for entries that predate the diary — the dates already on the entry.
-    const rows = () => {
-        if (logs && logs.length) return logs.map((l) => ({ ...l, legacy: false }));
+    // Entries that predate the diary (or were only ever marked from the status
+    // menu) have no log rows — just the dates on the entry itself.
+    const legacyRows = () => {
         const e = entryRef.current;
         const out = [];
         if (e?.date_finished) out.push({ id: 'legacy-finished', watched_on: e.date_finished, started_on: e.date_started, is_rewatch: false, legacy: 'date_finished', created_at: e.date_finished });
         if (e?.date_rewatched) out.push({ id: 'legacy-rewatched', watched_on: e.date_rewatched, started_on: null, is_rewatch: true, legacy: 'date_rewatched', created_at: e.date_rewatched });
         return out;
     };
+    // Real logs, or the legacy dates above when there are none yet.
+    const rows = () => (logs && logs.length ? logs.map((l) => ({ ...l, legacy: false })) : legacyRows());
     const sortDesc = (arr) => arr.sort((a, b) => (b.watched_on || '').localeCompare(a.watched_on || '') || String(b.created_at || '').localeCompare(String(a.created_at || '')));
+    const byDateAsc = (a, b) => (a.watched_on || '').localeCompare(b.watched_on || '');
 
     async function ensureEntry() {
         if (!entryRef.current) entryRef.current = await upsertEntryAndInvalidate(details.mediaId, { status: 'planned' });
@@ -5446,31 +5454,91 @@ function setupDetailPanel({ details, entryRef, dateStartedInput, dateFinishedInp
         if (isTv && started) fields.date_started = started;
         const cur = entryRef.current?.status;
         if (list.length >= 2 || rewatches.length) { if (cur !== 'dropped') fields.status = 'rewatched'; }
-        else if (list.length === 1 && (!cur || cur === 'planned' || cur === 'in_progress')) fields.status = 'completed';
+        // One viewing left (e.g. after deleting a rewatch) is plain Watched again.
+        else if (list.length === 1 && cur !== 'dropped' && cur !== 'completed') fields.status = 'completed';
         entryRef.current = await upsertEntryAndInvalidate(details.mediaId, fields);
         dateFinishedInput.setISO(fields.date_finished);
         dateRewatchedInput.setISO(fields.date_rewatched);
         if (fields.date_started) dateStartedInput?.setISO(fields.date_started);
     }
-    const loaded = (async () => {
+    // Always re-read before changing anything: other paths write logs too
+    // (finishing a book, another device), and removing the title deletes them.
+    async function refreshLogs() {
         if (!entryRef.current) { logs = []; return; }
-        try { logs = await window.api.listEntryLogs(entryRef.current.id); }
+        try { logs = sortDesc(await window.api.listEntryLogs(entryRef.current.id)); tableOk = true; }
         catch { logs = null; tableOk = false; }
-    })();
+    }
+    const loaded = refreshLogs();
+
+    const apiAdd = (r) => window.api.addEntryLog({ entryId: entryRef.current.id, watchedOn: r.watched_on || null, startedOn: r.started_on || null, isRewatch: !!r.is_rewatch });
+    // entry_logs rows can't be updated in place (no UPDATE policy), so an edit
+    // adds the new row first and only then deletes the old one.
+    async function replaceLog(log, changes) {
+        const next = await apiAdd({ ...log, ...changes });
+        await window.api.deleteEntryLog(log.id);
+        logs = sortDesc(logs.map((l) => (l.id === log.id ? next : l)));
+        return next;
+    }
+    async function deleteLog(log) {
+        await window.api.deleteEntryLog(log.id);
+        logs = logs.filter((l) => l.id !== log.id);
+    }
+    // First real log for an entry that already has dates: keep that history as diary rows first.
+    async function materializeLegacy() {
+        if (logs.length) return;
+        for (const r of legacyRows()) logs.push(await apiAdd(r));
+        sortDesc(logs);
+    }
 
     async function addLog({ watchedOn, startedOn, rewatch }) {
         await ensureEntry();
-        await loaded;
+        await refreshLogs();
         if (!tableOk) throw new Error('no table');
-        if (logs === null) logs = [];
-        const api = (r) => window.api.addEntryLog({ entryId: entryRef.current.id, watchedOn: r.watched_on, startedOn: r.started_on, isRewatch: r.is_rewatch });
-        if (logs.length === 0) {
-            // First real log for an entry that already has dates: keep that history as diary rows first.
-            for (const r of rows().filter((x) => x.legacy)) logs.push(await api(r));
+        await materializeLegacy();
+        // Same date as a viewing already in the diary (typically the date the
+        // status menu filled in): that's the same viewing, not a rewatch.
+        const sameDay = watchedOn && logs.find((l) => l.watched_on === watchedOn);
+        if (sameDay) {
+            if (startedOn && sameDay.started_on !== startedOn) await replaceLog(sameDay, { started_on: startedOn });
+            return;
         }
-        if (rewatch && logs.length === 0) logs.push(await api({ watched_on: null, started_on: null, is_rewatch: false }));
-        logs.push(await api({ watched_on: watchedOn || null, started_on: startedOn || null, is_rewatch: !!rewatch }));
+        if (rewatch && logs.length === 0) logs.push(await apiAdd({ watched_on: null, started_on: null, is_rewatch: false }));
+        logs.push(await apiAdd({ watched_on: watchedOn, started_on: startedOn, is_rewatch: rewatch }));
         sortDesc(logs);
+    }
+
+    // The page's own date fields edit the diary once it has real rows, so the
+    // two can't disagree (and the next log can't overwrite the edit). Returns
+    // false when there's no diary yet — the caller then just saves the entry.
+    async function editEntryDate(field, iso) {
+        if (field === 'date_started' && !isTv) return false;
+        await refreshLogs();
+        if (!tableOk || !logs.length) return false;
+        const firsts = logs.filter((l) => !l.is_rewatch);
+        if (field === 'date_finished') {
+            const target = [...firsts].filter((l) => l.watched_on).sort(byDateAsc)[0] || firsts[0];
+            if (target) await replaceLog(target, { watched_on: iso });
+            else if (iso) logs.push(await apiAdd({ watched_on: iso, is_rewatch: false }));
+        } else if (field === 'date_rewatched') {
+            const rewatches = logs.filter((l) => l.is_rewatch).sort(byDateAsc);
+            const target = rewatches[rewatches.length - 1];
+            if (target) await replaceLog(target, { watched_on: iso });
+            else if (iso) logs.push(await apiAdd({ watched_on: iso, is_rewatch: true }));
+        } else {
+            const target = logs.filter((l) => l.started_on).sort((a, b) => a.started_on.localeCompare(b.started_on))[0]
+                || [...firsts].sort(byDateAsc)[0];
+            if (!target) return false;
+            await replaceLog(target, { started_on: iso });
+        }
+        sortDesc(logs);
+        await syncEntry(logs);
+        if (field === 'date_started' && !iso) {
+            // syncEntry only ever fills the start date in; clearing it has to be explicit.
+            entryRef.current = await upsertEntryAndInvalidate(details.mediaId, { date_started: null });
+            dateStartedInput?.setISO(null);
+        }
+        paint();
+        return true;
     }
 
     // ---------- panel ----------
@@ -5677,7 +5745,8 @@ function setupDetailPanel({ details, entryRef, dateStartedInput, dateFinishedInp
     }
 
     // ---------- "Your activity for…" ----------
-    function openActivityModal() {
+    async function openActivityModal() {
+        await refreshLogs(); // show what's really saved, not what this page loaded with
         document.querySelectorAll('.diary-modal').forEach((n) => n.remove());
         const overlay = document.createElement('div');
         overlay.className = 'diary-modal';
@@ -5714,24 +5783,88 @@ function setupDetailPanel({ details, entryRef, dateStartedInput, dateFinishedInp
                 if (!list.length && (e?.rating || e?.is_favorite)) html = `<div class="act-row"><div class="act-row-text"><b class="act-who">You</b> ${e.rating ? 'rated' : 'liked'} <b>${escapeHtml(details.title)}</b>${stars}${heart}</div></div>`;
                 body.innerHTML = `${html}<div class="act-end">End of recent activity</div>`;
             } else if (tab === 'diary') {
-                body.innerHTML = list.length ? list.map((l) => `<div class="diary-row"><span class="diary-row-date">${isTv && l.started_on ? `${fmt(l.started_on)} → ` : ''}${fmt(l.watched_on)}</span>${l.is_rewatch ? '<span class="diary-row-tag">Rewatch</span>' : ''}</div>`).join('') : '<div class="act-end">Nothing in your diary yet</div>';
+                diaryList = list;
+                const actions = tableOk ? `<span class="diary-row-actions"><button type="button" class="diary-row-btn" data-act="edit">Edit</button><button type="button" class="diary-row-btn" data-act="delete">Delete</button></span>` : '';
+                body.innerHTML = list.length ? list.map((l, i) => `<div class="diary-row" data-i="${i}"><span class="diary-row-date">${isTv && l.started_on ? `${fmt(l.started_on)} → ` : ''}${fmt(l.watched_on)}</span>${l.is_rewatch ? '<span class="diary-row-tag">Rewatch</span>' : ''}${actions}</div>`).join('') : '<div class="act-end">Nothing in your diary yet</div>';
             } else {
                 body.innerHTML = e?.review ? `<div class="act-review-full">${stars}${heart}${e.review_spoilers ? `<div class="spoiler-wrap"><div class="spoiler-warn">Contains spoilers &middot; click to reveal</div><p class="spoiler-body hidden">${escapeHtml(e.review)}</p></div>` : `<p>${escapeHtml(e.review)}</p>`}</div>` : '<div class="act-end">No review yet</div>';
             }
         };
+        // ---- editing / deleting single diary rows ----
+        let diaryList = [];
+        let currentTab = 'activity';
+        // Legacy rows (dates on the entry, no log rows yet) become real rows first, so they can be edited like any other.
+        async function realLog(row) {
+            if (!row.legacy) return logs.find((l) => l.id === row.id) || row;
+            await ensureEntry();
+            await materializeLegacy();
+            return logs.find((l) => l.watched_on === row.watched_on && !!l.is_rewatch === !!row.is_rewatch);
+        }
+        async function afterDiaryChange(message) {
+            await syncEntry(logs);
+            paint();
+            paintStatusButtons();
+            render(currentTab);
+            showToast(message);
+        }
+        body.addEventListener('click', async (ev) => {
+            const btn = ev.target.closest('button[data-act]');
+            const rowEl = btn?.closest('.diary-row');
+            if (!btn || !rowEl) return;
+            const row = diaryList[Number(rowEl.dataset.i)];
+            if (!row) return;
+            if (btn.dataset.act === 'delete') {
+                if (!(await showConfirm(`Delete the ${fmt(row.watched_on)} entry from your diary?`, { confirmLabel: 'Delete' }))) return;
+                try {
+                    const log = await realLog(row);
+                    if (log) await deleteLog(log);
+                    await afterDiaryChange('Removed from your diary');
+                } catch (err) { showToast(`Couldn't delete: ${err.message}`, true); }
+                return;
+            }
+            if (btn.dataset.act === 'edit') {
+                rowEl.innerHTML = `<div class="diary-row-edit">
+                    ${isTv ? '<span class="dm-sub">Started</span><div class="dre-started"></div>' : ''}
+                    <span class="dm-sub">${isTv ? 'Finished' : past}</span><div class="dre-watched"></div>
+                    <label class="diary-check"><input type="checkbox" class="dre-rewatch" ${row.is_rewatch ? 'checked' : ''}><span class="diary-box-mark"></span><span>Rewatch</span></label>
+                    <span class="diary-row-actions"><button type="button" class="diary-row-btn" data-edit="save">Save</button><button type="button" class="diary-row-btn" data-edit="cancel">Cancel</button></span>
+                </div>`;
+                const watched = createDateInput({ container: rowEl.querySelector('.dre-watched'), initialISO: row.watched_on || null, onChange: () => {} });
+                const started = isTv ? createDateInput({ container: rowEl.querySelector('.dre-started'), initialISO: row.started_on || null, onChange: () => {} }) : null;
+                rowEl.querySelector('[data-edit="cancel"]').addEventListener('click', () => render(currentTab));
+                rowEl.querySelector('[data-edit="save"]').addEventListener('click', async (e2) => {
+                    e2.currentTarget.disabled = true;
+                    try {
+                        const log = await realLog(row);
+                        if (!log) throw new Error('That diary entry no longer exists');
+                        await replaceLog(log, {
+                            watched_on: watched.getISO() || null,
+                            started_on: started ? (started.getISO() || null) : log.started_on,
+                            is_rewatch: rowEl.querySelector('.dre-rewatch').checked,
+                        });
+                        await afterDiaryChange('Diary updated');
+                    } catch (err) {
+                        showToast(`Couldn't save: ${err.message}`, true);
+                        e2.currentTarget.disabled = false;
+                    }
+                });
+            }
+        });
+
         render('activity');
         overlay.querySelector('#actTabs').addEventListener('click', (ev) => {
             const b = ev.target.closest('.stats-switch-btn');
             if (!b) return;
             overlay.querySelectorAll('#actTabs .stats-switch-btn').forEach((x) => x.classList.toggle('active', x === b));
-            render(b.dataset.tab);
+            currentTab = b.dataset.tab;
+            render(currentTab);
         });
     }
 
     paint();
     panelEl.classList.remove('hidden');
     loaded.then(paint);
-    return { paint };
+    return { paint, editEntryDate, refresh: () => refreshLogs().then(paint) };
 }
 
 // "Add to list" — a Spotify "Add to playlist"-style dropdown under the

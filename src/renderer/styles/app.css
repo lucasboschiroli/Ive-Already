@@ -1952,6 +1952,12 @@ select { display: none; } /* native selects fully replaced by .custom-select com
 .diary-row { display: flex; align-items: center; gap: 1.2rem; padding: 0.9rem 0; border-bottom: 1px solid rgba(0,0,0,0.08); font-size: 1.35rem; }
 .diary-row-date { flex: 1; color: #1a1a1a; font-weight: 600; }
 .diary-row-tag { font-size: 1.1rem; font-weight: 700; color: var(--accent); border: 1.5px solid var(--accent); border-radius: 12px; padding: 0.1rem 0.8rem; }
+.diary-row-actions { display: flex; gap: 0.6rem; margin-left: auto; }
+.diary-row-btn { background: none; border: 1.5px solid #ccc; border-radius: 14px; padding: 0.3rem 1rem; font: inherit; font-size: 1.15rem; font-weight: 600; color: #1a1a1a; cursor: pointer; }
+.diary-row-btn:hover { border-color: var(--accent); color: var(--accent); }
+.diary-row-btn:disabled { opacity: 0.5; cursor: default; }
+.diary-row-edit { display: flex; flex-wrap: wrap; align-items: center; gap: 0.8rem 1.2rem; width: 100%; }
+.diary-row-edit .date-input-wrap { width: 15rem; }
 .diary-row-del { background: none; border: none; font-size: 2rem; line-height: 1; color: var(--gray); cursor: pointer; }
 .diary-row-del:hover { color: var(--accent); }
 .diary-note { font-size: 1.2rem; color: var(--gray); margin-top: 1rem; }
