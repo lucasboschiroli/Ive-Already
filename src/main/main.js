@@ -1,7 +1,7 @@
 require('./env');
 const updater = require('./updater');
 const path = require('path');
-const { app, BrowserWindow, Menu, ipcMain, shell } = require('electron');
+const { app, BrowserWindow, Menu, ipcMain, shell, dialog } = require('electron');
 const sb = require('./supabase');
 const { registerHandlers } = require('./ipc-handlers');
 
@@ -130,7 +130,22 @@ app.whenReady().then(() => {
     // Installed app only: a dev run shouldn't point links at node_modules/electron.
     if (app.isPackaged) app.setAsDefaultProtocolClient(PROTOCOL);
     Menu.setApplicationMenu(null); // no File/Edit/View/Window/Help bar
-    sb.init();
+    try {
+        sb.init();
+    } catch (err) {
+        // A build whose bundled .env is missing keys used to start with no window
+        // at all. Say so instead — and keep the updater running while the message
+        // is up, so a fixed release can still download and install itself.
+        updater.init(() => null);
+        dialog.showMessageBox({
+            type: 'error',
+            title: "I've Already can't start",
+            message: "I've Already can't start because its setup is incomplete.",
+            detail: `${err.message}\n\nIf a fixed version is available it will download in the background and offer to restart — leave this open for a minute. Otherwise reinstall the latest version from GitHub.`,
+            buttons: ['Close'],
+        }).then(() => app.quit());
+        return;
+    }
     registerHandlers();
     registerWindowControls();
     createWindow();

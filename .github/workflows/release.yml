@@ -16,7 +16,15 @@ jobs:
       - run: npm ci
       - name: Write .env from secrets
         shell: bash
+        env:
+          TMDB_API_KEY: ${{ secrets.TMDB_API_KEY }}
+          SUPABASE_URL: ${{ secrets.SUPABASE_URL }}
+          SUPABASE_ANON_KEY: ${{ secrets.SUPABASE_ANON_KEY }}
         run: |
+          # An installer without these can't start at all, and auto-update would ship it to everyone — stop here instead.
+          for k in TMDB_API_KEY SUPABASE_URL SUPABASE_ANON_KEY; do
+            if [ -z "${!k}" ]; then echo "::error::Repository secret $k is empty — add it under Settings > Secrets and variables > Actions"; exit 1; fi
+          done
           printf 'TMDB_API_KEY=%s\nSUPABASE_URL=%s\nSUPABASE_ANON_KEY=%s\nRAWG_API_KEY=%s\nOMDB_API_KEY=%s\n' \
             "${{ secrets.TMDB_API_KEY }}" "${{ secrets.SUPABASE_URL }}" "${{ secrets.SUPABASE_ANON_KEY }}" "${{ secrets.RAWG_API_KEY }}" "${{ secrets.OMDB_API_KEY }}" > .env
       - run: npx electron-builder --win --publish always
