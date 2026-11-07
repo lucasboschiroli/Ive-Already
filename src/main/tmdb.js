@@ -238,7 +238,15 @@ function airedEpisodeCount(d) {
     const priorSeasonsTotal = (d.seasons || [])
         .filter((s) => s.season_number != null && s.season_number > 0 && s.season_number < last.season_number)
         .reduce((sum, s) => sum + (s.episode_count || 0), 0);
-    return priorSeasonsTotal + (last.episode_number || 0);
+    // Most shows restart episode numbers each season, but some (One Piece,
+    // many anime) number them across the whole series: its latest season runs
+    // 1156–1180, so "prior seasons + episode number" would count 2335. An
+    // episode number bigger than its own season can hold means that style —
+    // turn it back into a position within the season.
+    const lastSeasonSize = (d.seasons || []).find((s) => s.season_number === last.season_number)?.episode_count || 0;
+    let position = last.episode_number || 0;
+    if (lastSeasonSize && position > lastSeasonSize) position = Math.min(Math.max(position - priorSeasonsTotal, 1), lastSeasonSize);
+    return priorSeasonsTotal + position;
 }
 
 function normalizeDetails(d, mediaType) {
