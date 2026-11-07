@@ -292,6 +292,13 @@ async function upsertMedia(media) {
         tmdb_vote_average: media.tmdb_vote_average,
         raw_json: media.raw_json,
     };
+    // Writes go through media_upsert (media-cache-guard-migration.sql): it adds
+    // new titles and refreshes cached ones at most every 12 hours, and clients
+    // can no longer UPDATE the shared cache directly.
+    const { data: id, error: rpcErr } = await getClient().rpc('media_upsert', { p: row });
+    if (!rpcErr) return id;
+    if (!isMissingFunction(rpcErr)) throw rpcErr;
+    // Migration not run yet: write directly, as before.
     const { data, error } = await getClient()
         .from('media')
         .upsert(row, { onConflict: 'tmdb_id,media_type' })
@@ -299,6 +306,11 @@ async function upsertMedia(media) {
         .single();
     if (error) throw error;
     return data.id;
+}
+
+// PostgREST's "no such function" error — the matching migration hasn't been run yet.
+function isMissingFunction(error) {
+    return error?.code === 'PGRST202' || /could not find the function/i.test(error?.message || '');
 }
 
 // Caches season-level poster/name — called alongside upsertMedia whenever
@@ -341,6 +353,10 @@ async function getSeasonPosters(pairs) {
 // upsertMedia() (that needs the whole normalized TMDB payload) just to fix
 // up two numbers.
 async function updateMediaEpisodeCounts(mediaId, { number_of_seasons, number_of_episodes }) {
+    const { error: rpcErr } = await getClient().rpc('media_set_episode_counts',
+        { p_id: mediaId, p_seasons: number_of_seasons ?? null, p_episodes: number_of_episodes ?? null });
+    if (!rpcErr) return;
+    if (!isMissingFunction(rpcErr)) throw rpcErr;
     const { error } = await getClient()
         .from('media')
         .update({ number_of_seasons, number_of_episodes })
@@ -355,6 +371,10 @@ async function updateMediaEpisodeCounts(mediaId, { number_of_seasons, number_of_
 // Tomatometer yet (e.g. it hasn't released) doesn't get hit on every single
 // page view, but still catches up once a score actually exists.
 async function updateMediaRatings(mediaId, { imdb_id, imdb_rating, imdb_votes, rt_tomatometer, awards }) {
+    const { error: rpcErr } = await getClient().rpc('media_set_ratings',
+        { p_id: mediaId, p: { imdb_id, imdb_rating, imdb_votes, rt_tomatometer, awards } });
+    if (!rpcErr) return;
+    if (!isMissingFunction(rpcErr)) throw rpcErr;
     const { error } = await getClient()
         .from('media')
         .update({ imdb_id, imdb_rating, imdb_votes, rt_tomatometer, awards_text: awards, ratings_checked_at: new Date().toISOString() })
@@ -1627,8 +1647,10 @@ async function listSharedWithMe(session) {
 
 async function getList(session, listId) {
     const userId = requireUserId(session);
-    const { data: list, error } = await getClient()
-        .from('lists').select('id, name, description, genres, is_ranked, visibility, is_official, is_favorites, created_at, updated_at, user_id').eq('id', listId).single();
+    const listCols = 'id, name, description, genres, is_ranked, visibility, is_official, is_favorites, created_at, updated_at, user_id';
+    let { data: list, error } = await getClient().from('lists').select(`${listCols}, share_token`).eq('id', listId).single();
+    // share_token column not added yet (list-share-links-migration.sql not run).
+    if (error && /share_token/.test(error.message || '')) ({ data: list, error } = await getClient().from('lists').select(listCols).eq('id', listId).single());
     if (error) throw error;
 
     // Owner's name/avatar for the "List by ..." header — fetched for both
@@ -1788,6 +1810,16 @@ async function cloneList(session, listId) {
     const { error: cloneLogErr } = await getClient().from('list_clones').insert({ list_id: listId, cloner_id: userId, new_list_id: created.id });
     if (cloneLogErr) console.error('recording clone failed:', cloneLogErr.message);
     return created;
+}
+
+// Opening an ivealready://list/<token> link: returns the list id to open, and
+// for an "Anyone with share link" list adds it to this account's Shared with me.
+async function openSharedList(session, token) {
+    requireUserId(session);
+    if (!/^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i.test(String(token || ''))) throw new Error("That isn't a valid list link");
+    const { data, error } = await getClient().rpc('open_shared_list', { p_token: token });
+    if (error) throw new Error(isMissingFunction(error) ? 'Share links need list-share-links-migration.sql' : error.message);
+    return data;
 }
 
 async function setListVisibility(listId, visibility) {
@@ -1978,6 +2010,7 @@ module.exports = {
     listOfficialLists,
     listOfficialPublicLists,
     setListVisibility,
+    openSharedList,
     listComments,
     isListThreadMuted,
     toggleListThreadMute,

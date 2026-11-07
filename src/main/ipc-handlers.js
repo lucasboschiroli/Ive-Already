@@ -428,6 +428,8 @@ function registerHandlers() {
         return sb.cloneList(session, listId);
     });
 
+    ipcMain.handle('lists:openShared', async (_evt, { token }) => sb.openSharedList(await requireSession(), token));
+
     ipcMain.handle('lists:setVisibility', async (_evt, { listId, visibility }) => {
         await requireSession();
         await sb.setListVisibility(listId, visibility);
@@ -750,10 +752,21 @@ function registerHandlers() {
     // ---- episodes (TV progress) ----
     ipcMain.handle('episodes:getSeason', async (_evt, { mediaId, tmdbId, seasonNumber }) => {
         let episodes = await sb.getEpisodes(mediaId, seasonNumber);
-        if (episodes.length === 0) {
-            const fetched = await tmdb.getTvSeasonEpisodes(tmdbId, seasonNumber);
-            await sb.upsertEpisodes(mediaId, fetched);
-            episodes = await sb.getEpisodes(mediaId, seasonNumber);
+        // Re-fetch a season that may still be airing, not just an uncached one —
+        // otherwise episodes announced after the first visit never show up and
+        // can't be ticked. "May still be airing": an episode with no air date,
+        // one in the future, or one that aired in the last 60 days.
+        const recent = new Date(Date.now() - 60 * 864e5).toISOString().slice(0, 10);
+        const mayBeAiring = episodes.some((ep) => !ep.air_date || ep.air_date >= recent);
+        if (episodes.length === 0 || mayBeAiring) {
+            try {
+                const fetched = await tmdb.getTvSeasonEpisodes(tmdbId, seasonNumber);
+                if (fetched.length) await sb.upsertEpisodes(mediaId, fetched);
+                episodes = await sb.getEpisodes(mediaId, seasonNumber);
+            } catch (err) {
+                if (episodes.length === 0) throw err;
+                console.error('season refresh failed, using cached episodes:', err.message); // offline etc.
+            }
         }
         return episodes;
     });
