@@ -14,6 +14,7 @@
 --
 -- Run once in the Supabase SQL editor. Safe to re-run. Run it BEFORE using an
 -- app build that shows token links.
+-- Applied to the live project on 2026-11-08 (already in schema.sql).
 
 alter table public.lists add column if not exists share_token uuid not null default gen_random_uuid();
 create unique index if not exists lists_share_token_key on public.lists (share_token);

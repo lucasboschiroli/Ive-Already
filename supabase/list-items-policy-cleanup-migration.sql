@@ -7,6 +7,7 @@
 -- changes nothing about who can do what.
 --
 -- Run once in the Supabase SQL editor. Safe to re-run.
+-- Applied to the live project on 2026-11-08 (already in schema.sql).
 
 drop policy if exists "list_items insert via list ownership" on public.list_items;
 drop policy if exists "list_items delete via list ownership" on public.list_items;

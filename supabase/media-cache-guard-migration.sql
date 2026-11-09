@@ -21,6 +21,7 @@
 -- Run once in the Supabase SQL editor. Safe to re-run. Run it BEFORE using
 -- an app build that calls media_upsert (older builds stop being able to
 -- refresh cached titles once this is applied).
+-- Applied to the live project on 2026-11-08 (already in schema.sql).
 
 -- ---------- validation ----------
 

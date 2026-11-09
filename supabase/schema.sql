@@ -43,7 +43,7 @@ CREATE OR REPLACE FUNCTION "public"."can_view_list"("target_list_id" bigint) RET
         where l.id = target_list_id and (
             l.user_id = auth.uid()
             or l.is_official
-            or l.visibility in ('public', 'link')
+            or l.visibility = 'public'
             or (l.visibility = 'friends' and exists (
                 select 1 from public.user_follows f
                 where f.follower_id = l.user_id and f.followee_id = auth.uid()))
@@ -125,6 +125,24 @@ end $$;
 ALTER FUNCTION "public"."entries_sync_favorites"() OWNER TO "postgres";
 
 
+CREATE OR REPLACE FUNCTION "public"."episodes_validate"() RETURNS "trigger"
+    LANGUAGE "plpgsql"
+    AS $_$
+begin
+    if tg_op = 'UPDATE' and (new.media_id <> old.media_id or new.season_number <> old.season_number
+        or new.episode_number <> old.episode_number) then
+        raise exception 'A cached episode cannot change which episode it is';
+    end if;
+    if length(new.name) > 500 or (new.air_date is not null and new.air_date <> '' and new.air_date !~ '^\d{4}-\d{2}-\d{2}$') then
+        raise exception 'Invalid episode data';
+    end if;
+    return new;
+end $_$;
+
+
+ALTER FUNCTION "public"."episodes_validate"() OWNER TO "postgres";
+
+
 CREATE OR REPLACE FUNCTION "public"."is_family_peer"("uid" "uuid") RETURNS boolean
     LANGUAGE "sql" STABLE SECURITY DEFINER
     SET "search_path" TO 'public'
@@ -184,6 +202,21 @@ $$;
 ALTER FUNCTION "public"."list_social_is_owner"("p_list_id" bigint) OWNER TO "postgres";
 
 
+CREATE OR REPLACE FUNCTION "public"."lists_drop_link_shares"() RETURNS "trigger"
+    LANGUAGE "plpgsql" SECURITY DEFINER
+    SET "search_path" TO 'public'
+    AS $$
+begin
+    if old.visibility = 'link' and new.visibility <> 'link' then
+        delete from public.list_shares where list_id = new.id and via_link;
+    end if;
+    return new;
+end $$;
+
+
+ALTER FUNCTION "public"."lists_drop_link_shares"() OWNER TO "postgres";
+
+
 CREATE OR REPLACE FUNCTION "public"."lists_guard_official"() RETURNS "trigger"
     LANGUAGE "plpgsql"
     AS $$
@@ -196,6 +229,120 @@ end $$;
 
 
 ALTER FUNCTION "public"."lists_guard_official"() OWNER TO "postgres";
+
+
+CREATE OR REPLACE FUNCTION "public"."media_image_ok"("p" "text") RETURNS boolean
+    LANGUAGE "sql" IMMUTABLE
+    AS $_$
+    select p is null or p = ''
+        or p ~ '^/[A-Za-z0-9_-]+\.(jpg|jpeg|png|svg|webp)$'
+        or p ~ '^https://(covers\.openlibrary\.org|media\.rawg\.io|(cdn|shared)\.akamai\.steamstatic\.com)/[^\s"''<>]*$';
+$_$;
+
+
+ALTER FUNCTION "public"."media_image_ok"("p" "text") OWNER TO "postgres";
+
+
+CREATE OR REPLACE FUNCTION "public"."media_set_episode_counts"("p_id" bigint, "p_seasons" integer, "p_episodes" integer) RETURNS "void"
+    LANGUAGE "plpgsql" SECURITY DEFINER
+    SET "search_path" TO 'public'
+    AS $$
+begin
+    if auth.uid() is null then raise exception 'Not signed in'; end if;
+    update public.media set number_of_seasons = p_seasons, number_of_episodes = p_episodes, cached_at = now()
+        where id = p_id and media_type = 'tv' and cached_at < now() - interval '12 hours';
+end $$;
+
+
+ALTER FUNCTION "public"."media_set_episode_counts"("p_id" bigint, "p_seasons" integer, "p_episodes" integer) OWNER TO "postgres";
+
+
+CREATE OR REPLACE FUNCTION "public"."media_set_ratings"("p_id" bigint, "p" "jsonb") RETURNS "void"
+    LANGUAGE "plpgsql" SECURITY DEFINER
+    SET "search_path" TO 'public'
+    AS $$
+begin
+    if auth.uid() is null then raise exception 'Not signed in'; end if;
+    update public.media set
+        imdb_id = p->>'imdb_id', imdb_rating = (p->>'imdb_rating')::real, imdb_votes = p->>'imdb_votes',
+        rt_tomatometer = (p->>'rt_tomatometer')::numeric::int, awards_text = p->>'awards', ratings_checked_at = now()
+    where id = p_id and (ratings_checked_at is null or ratings_checked_at < now() - interval '6 days');
+end $$;
+
+
+ALTER FUNCTION "public"."media_set_ratings"("p_id" bigint, "p" "jsonb") OWNER TO "postgres";
+
+
+CREATE OR REPLACE FUNCTION "public"."media_upsert"("p" "jsonb") RETURNS bigint
+    LANGUAGE "plpgsql" SECURITY DEFINER
+    SET "search_path" TO 'public'
+    AS $$
+declare v_id bigint; v_cached timestamptz;
+begin
+    if auth.uid() is null then raise exception 'Not signed in'; end if;
+    select id, cached_at into v_id, v_cached from public.media
+        where tmdb_id = (p->>'tmdb_id')::int and media_type = p->>'media_type';
+    if v_id is null then
+        insert into public.media (tmdb_id, media_type, title, original_title, poster_path, backdrop_path, release_date,
+            overview, runtime, number_of_seasons, number_of_episodes, genres, tmdb_vote_average, raw_json)
+        values ((p->>'tmdb_id')::int, p->>'media_type', p->>'title', p->>'original_title', p->>'poster_path',
+            p->>'backdrop_path', p->>'release_date', p->>'overview', (p->>'runtime')::numeric::int,
+            (p->>'number_of_seasons')::numeric::int, (p->>'number_of_episodes')::numeric::int, p->>'genres',
+            (p->>'tmdb_vote_average')::real, p->>'raw_json')
+        on conflict (tmdb_id, media_type) do nothing
+        returning id into v_id;
+        if v_id is null then -- another account cached it at the same moment
+            select id into v_id from public.media where tmdb_id = (p->>'tmdb_id')::int and media_type = p->>'media_type';
+        end if;
+        return v_id;
+    end if;
+    if v_cached < now() - interval '12 hours' then
+        update public.media set
+            title = p->>'title', original_title = p->>'original_title', poster_path = p->>'poster_path',
+            backdrop_path = p->>'backdrop_path', release_date = p->>'release_date', overview = p->>'overview',
+            runtime = (p->>'runtime')::numeric::int, number_of_seasons = (p->>'number_of_seasons')::numeric::int,
+            number_of_episodes = (p->>'number_of_episodes')::numeric::int, genres = p->>'genres',
+            tmdb_vote_average = (p->>'tmdb_vote_average')::real, raw_json = p->>'raw_json', cached_at = now()
+        where id = v_id;
+    end if;
+    return v_id;
+end $$;
+
+
+ALTER FUNCTION "public"."media_upsert"("p" "jsonb") OWNER TO "postgres";
+
+
+CREATE OR REPLACE FUNCTION "public"."media_validate"() RETURNS "trigger"
+    LANGUAGE "plpgsql"
+    AS $_$
+begin
+    if tg_op = 'UPDATE' and (new.tmdb_id <> old.tmdb_id or new.media_type <> old.media_type) then
+        raise exception 'A cached title cannot change which title it is';
+    end if;
+    if coalesce(length(new.title), 0) = 0 or length(new.title) > 500 then
+        raise exception 'Invalid title';
+    end if;
+    if length(new.original_title) > 500 or length(new.overview) > 20000 or length(new.release_date) > 32
+        or length(new.genres) > 10000 or length(new.raw_json) > 2000000
+        or length(new.awards_text) > 1000 or length(new.imdb_votes) > 20 then
+        raise exception 'A cached title field is too long';
+    end if;
+    if not public.media_image_ok(new.poster_path) or not public.media_image_ok(new.backdrop_path) then
+        raise exception 'Images must come from TMDB, Open Library, RAWG or Steam';
+    end if;
+    if new.imdb_id is not null and new.imdb_id <> '' and new.imdb_id !~ '^tt[0-9]{1,12}$' then
+        raise exception 'Invalid IMDb id';
+    end if;
+    if new.runtime not between 0 and 100000 or new.number_of_seasons not between 0 and 1000
+        or new.number_of_episodes not between 0 and 100000 or new.tmdb_vote_average not between 0 and 10
+        or new.imdb_rating not between 0 and 10 or new.rt_tomatometer not between 0 and 100 then
+        raise exception 'A cached title number is out of range';
+    end if;
+    return new;
+end $_$;
+
+
+ALTER FUNCTION "public"."media_validate"() OWNER TO "postgres";
 
 
 CREATE OR REPLACE FUNCTION "public"."my_family_id"() RETURNS bigint
@@ -246,6 +393,47 @@ $$;
 
 
 ALTER FUNCTION "public"."official_is_admin"() OWNER TO "postgres";
+
+
+CREATE OR REPLACE FUNCTION "public"."open_shared_list"("p_token" "uuid") RETURNS bigint
+    LANGUAGE "plpgsql" SECURITY DEFINER
+    SET "search_path" TO 'public'
+    AS $$
+declare l record;
+begin
+    if auth.uid() is null then raise exception 'Not signed in'; end if;
+    select id, user_id, visibility into l from public.lists where share_token = p_token;
+    if not found then raise exception 'This link doesn''t work anymore'; end if;
+    if l.user_id = auth.uid() then return l.id; end if;
+    if l.visibility = 'link' then
+        insert into public.list_shares (list_id, shared_with_user_id, via_link)
+            values (l.id, auth.uid(), true)
+            on conflict (list_id, shared_with_user_id) do nothing;
+        return l.id;
+    end if;
+    if public.can_view_list(l.id) then return l.id; end if;
+    raise exception 'This list is private';
+end $$;
+
+
+ALTER FUNCTION "public"."open_shared_list"("p_token" "uuid") OWNER TO "postgres";
+
+
+CREATE OR REPLACE FUNCTION "public"."season_meta_validate"() RETURNS "trigger"
+    LANGUAGE "plpgsql"
+    AS $$
+begin
+    if tg_op = 'UPDATE' and (new.media_id <> old.media_id or new.season_number <> old.season_number) then
+        raise exception 'Cached season art cannot change which season it is';
+    end if;
+    if length(new.name) > 500 or not public.media_image_ok(new.poster_path) then
+        raise exception 'Invalid season data';
+    end if;
+    return new;
+end $$;
+
+
+ALTER FUNCTION "public"."season_meta_validate"() OWNER TO "postgres";
 
 
 CREATE OR REPLACE FUNCTION "public"."set_updated_at"() RETURNS "trigger"
@@ -558,7 +746,8 @@ CREATE TABLE IF NOT EXISTS "public"."list_shares" (
     "id" bigint NOT NULL,
     "list_id" bigint NOT NULL,
     "shared_with_user_id" "uuid" NOT NULL,
-    "created_at" timestamp with time zone DEFAULT "now"() NOT NULL
+    "created_at" timestamp with time zone DEFAULT "now"() NOT NULL,
+    "via_link" boolean DEFAULT false NOT NULL
 );
 
 
@@ -588,6 +777,7 @@ CREATE TABLE IF NOT EXISTS "public"."lists" (
     "visibility" "text" DEFAULT 'private'::"text" NOT NULL,
     "is_official" boolean DEFAULT false NOT NULL,
     "is_favorites" boolean DEFAULT false NOT NULL,
+    "share_token" "uuid" DEFAULT "gen_random_uuid"() NOT NULL,
     CONSTRAINT "lists_visibility_check" CHECK (("visibility" = ANY (ARRAY['public'::"text", 'link'::"text", 'friends'::"text", 'private'::"text"])))
 );
 
@@ -1075,6 +1265,10 @@ CREATE UNIQUE INDEX "lists_one_favorites_per_user" ON "public"."lists" USING "bt
 
 
 
+CREATE UNIQUE INDEX "lists_share_token_key" ON "public"."lists" USING "btree" ("share_token");
+
+
+
 CREATE INDEX "official_list_items_list_idx" ON "public"."official_list_items" USING "btree" ("list_id", "position");
 
 
@@ -1087,11 +1281,27 @@ CREATE OR REPLACE TRIGGER "entries_sync_favorites_trg" AFTER INSERT OR DELETE OR
 
 
 
+CREATE OR REPLACE TRIGGER "episodes_validate_trg" BEFORE INSERT OR UPDATE ON "public"."episodes" FOR EACH ROW EXECUTE FUNCTION "public"."episodes_validate"();
+
+
+
+CREATE OR REPLACE TRIGGER "lists_drop_link_shares_trg" AFTER UPDATE OF "visibility" ON "public"."lists" FOR EACH ROW EXECUTE FUNCTION "public"."lists_drop_link_shares"();
+
+
+
 CREATE OR REPLACE TRIGGER "lists_guard_official_trg" BEFORE INSERT OR UPDATE ON "public"."lists" FOR EACH ROW EXECUTE FUNCTION "public"."lists_guard_official"();
 
 
 
 CREATE OR REPLACE TRIGGER "lists_set_updated_at" BEFORE UPDATE ON "public"."lists" FOR EACH ROW EXECUTE FUNCTION "public"."set_updated_at"();
+
+
+
+CREATE OR REPLACE TRIGGER "media_validate_trg" BEFORE INSERT OR UPDATE ON "public"."media" FOR EACH ROW EXECUTE FUNCTION "public"."media_validate"();
+
+
+
+CREATE OR REPLACE TRIGGER "season_meta_validate_trg" BEFORE INSERT OR UPDATE ON "public"."season_meta" FOR EACH ROW EXECUTE FUNCTION "public"."season_meta_validate"();
 
 
 
@@ -1458,19 +1668,7 @@ CREATE POLICY "list_items delete own" ON "public"."list_items" FOR DELETE USING 
 
 
 
-CREATE POLICY "list_items delete via list ownership" ON "public"."list_items" FOR DELETE USING ((EXISTS ( SELECT 1
-   FROM "public"."lists" "l"
-  WHERE (("l"."id" = "list_items"."list_id") AND ("l"."user_id" = "auth"."uid"())))));
-
-
-
 CREATE POLICY "list_items insert own" ON "public"."list_items" FOR INSERT WITH CHECK ("public"."is_list_owner"("list_id"));
-
-
-
-CREATE POLICY "list_items insert via list ownership" ON "public"."list_items" FOR INSERT WITH CHECK ((EXISTS ( SELECT 1
-   FROM "public"."lists" "l"
-  WHERE (("l"."id" = "list_items"."list_id") AND ("l"."user_id" = "auth"."uid"())))));
 
 
 
@@ -1542,14 +1740,6 @@ ALTER TABLE "public"."media" ENABLE ROW LEVEL SECURITY;
 
 
 CREATE POLICY "media readable by authenticated users" ON "public"."media" FOR SELECT USING (("auth"."role"() = 'authenticated'::"text"));
-
-
-
-CREATE POLICY "media updatable by authenticated users" ON "public"."media" FOR UPDATE USING (("auth"."role"() = 'authenticated'::"text"));
-
-
-
-CREATE POLICY "media writable by authenticated users" ON "public"."media" FOR INSERT WITH CHECK (("auth"."role"() = 'authenticated'::"text"));
 
 
 
@@ -1724,6 +1914,12 @@ GRANT ALL ON FUNCTION "public"."entries_sync_favorites"() TO "service_role";
 
 
 
+GRANT ALL ON FUNCTION "public"."episodes_validate"() TO "anon";
+GRANT ALL ON FUNCTION "public"."episodes_validate"() TO "authenticated";
+GRANT ALL ON FUNCTION "public"."episodes_validate"() TO "service_role";
+
+
+
 GRANT ALL ON FUNCTION "public"."is_family_peer"("uid" "uuid") TO "anon";
 GRANT ALL ON FUNCTION "public"."is_family_peer"("uid" "uuid") TO "authenticated";
 GRANT ALL ON FUNCTION "public"."is_family_peer"("uid" "uuid") TO "service_role";
@@ -1754,9 +1950,45 @@ GRANT ALL ON FUNCTION "public"."list_social_is_owner"("p_list_id" bigint) TO "se
 
 
 
+GRANT ALL ON FUNCTION "public"."lists_drop_link_shares"() TO "anon";
+GRANT ALL ON FUNCTION "public"."lists_drop_link_shares"() TO "authenticated";
+GRANT ALL ON FUNCTION "public"."lists_drop_link_shares"() TO "service_role";
+
+
+
 GRANT ALL ON FUNCTION "public"."lists_guard_official"() TO "anon";
 GRANT ALL ON FUNCTION "public"."lists_guard_official"() TO "authenticated";
 GRANT ALL ON FUNCTION "public"."lists_guard_official"() TO "service_role";
+
+
+
+GRANT ALL ON FUNCTION "public"."media_image_ok"("p" "text") TO "anon";
+GRANT ALL ON FUNCTION "public"."media_image_ok"("p" "text") TO "authenticated";
+GRANT ALL ON FUNCTION "public"."media_image_ok"("p" "text") TO "service_role";
+
+
+
+REVOKE ALL ON FUNCTION "public"."media_set_episode_counts"("p_id" bigint, "p_seasons" integer, "p_episodes" integer) FROM PUBLIC;
+GRANT ALL ON FUNCTION "public"."media_set_episode_counts"("p_id" bigint, "p_seasons" integer, "p_episodes" integer) TO "authenticated";
+GRANT ALL ON FUNCTION "public"."media_set_episode_counts"("p_id" bigint, "p_seasons" integer, "p_episodes" integer) TO "service_role";
+
+
+
+REVOKE ALL ON FUNCTION "public"."media_set_ratings"("p_id" bigint, "p" "jsonb") FROM PUBLIC;
+GRANT ALL ON FUNCTION "public"."media_set_ratings"("p_id" bigint, "p" "jsonb") TO "authenticated";
+GRANT ALL ON FUNCTION "public"."media_set_ratings"("p_id" bigint, "p" "jsonb") TO "service_role";
+
+
+
+REVOKE ALL ON FUNCTION "public"."media_upsert"("p" "jsonb") FROM PUBLIC;
+GRANT ALL ON FUNCTION "public"."media_upsert"("p" "jsonb") TO "authenticated";
+GRANT ALL ON FUNCTION "public"."media_upsert"("p" "jsonb") TO "service_role";
+
+
+
+GRANT ALL ON FUNCTION "public"."media_validate"() TO "anon";
+GRANT ALL ON FUNCTION "public"."media_validate"() TO "authenticated";
+GRANT ALL ON FUNCTION "public"."media_validate"() TO "service_role";
 
 
 
@@ -1781,6 +2013,18 @@ GRANT ALL ON FUNCTION "public"."official_add_item"("p_list_id" bigint, "p_media_
 GRANT ALL ON FUNCTION "public"."official_is_admin"() TO "anon";
 GRANT ALL ON FUNCTION "public"."official_is_admin"() TO "authenticated";
 GRANT ALL ON FUNCTION "public"."official_is_admin"() TO "service_role";
+
+
+
+REVOKE ALL ON FUNCTION "public"."open_shared_list"("p_token" "uuid") FROM PUBLIC;
+GRANT ALL ON FUNCTION "public"."open_shared_list"("p_token" "uuid") TO "authenticated";
+GRANT ALL ON FUNCTION "public"."open_shared_list"("p_token" "uuid") TO "service_role";
+
+
+
+GRANT ALL ON FUNCTION "public"."season_meta_validate"() TO "anon";
+GRANT ALL ON FUNCTION "public"."season_meta_validate"() TO "authenticated";
+GRANT ALL ON FUNCTION "public"."season_meta_validate"() TO "service_role";
 
 
 
