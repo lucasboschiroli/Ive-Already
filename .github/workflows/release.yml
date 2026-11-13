@@ -27,6 +27,27 @@ jobs:
           done
           printf 'TMDB_API_KEY=%s\nSUPABASE_URL=%s\nSUPABASE_ANON_KEY=%s\nRAWG_API_KEY=%s\nOMDB_API_KEY=%s\n' \
             "${{ secrets.TMDB_API_KEY }}" "${{ secrets.SUPABASE_URL }}" "${{ secrets.SUPABASE_ANON_KEY }}" "${{ secrets.RAWG_API_KEY }}" "${{ secrets.OMDB_API_KEY }}" > .env
+      # electron-builder uploads the installer, latest.yml and the blockmap in
+      # parallel; when no release exists yet, each upload can create its own
+      # release for the same tag (v0.2.2 and v0.2.3 were split in two, and the
+      # updater found latest.yml missing). Create one draft up front so they
+      # all land in it, and publish it only once everything is uploaded.
+      - name: Create draft release
+        shell: bash
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: gh release create "$GITHUB_REF_NAME" --draft --title "$GITHUB_REF_NAME" --notes "" --verify-tag
       - run: npx electron-builder --win --publish always
         env:
           GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+      - name: Publish release
+        shell: bash
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: |
+          assets=$(gh release view "$GITHUB_REF_NAME" --json assets --jq '[.assets[].name] | join(" ")')
+          echo "Uploaded: $assets"
+          # Never publish a release the updater can't use.
+          case " $assets " in *" latest.yml "*) ;; *) echo "::error::latest.yml was not uploaded"; exit 1;; esac
+          case " $assets " in *".exe "*) ;; *) echo "::error::the installer was not uploaded"; exit 1;; esac
+          gh release edit "$GITHUB_REF_NAME" --draft=false --latest

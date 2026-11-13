@@ -63,7 +63,7 @@
       "provider": "github",
       "owner": "lucasboschiroli",
       "repo": "Ive-Already",
-      "releaseType": "release"
+      "releaseType": "draft"
     }
   }
 }
