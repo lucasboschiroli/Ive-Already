@@ -303,6 +303,10 @@ function registerHandlers() {
     ipcMain.handle('diary:list', withSession((s, a) => sb.listEntryLogs(s, a.entryId), []));
     ipcMain.handle('diary:add', withSession((s, a) => sb.addEntryLog(s, a), null));
     ipcMain.handle('diary:delete', withSession((s, a) => sb.deleteEntryLog(s, a.logId), null));
+    ipcMain.handle('diary:all', withSession((s) => sb.listAllEntryLogs(s), []));
+    ipcMain.handle('statusEvents:list', withSession((s, a) => sb.listStatusEvents(s, a.entryId ?? null), []));
+    ipcMain.handle('statusEvents:redate', async (_evt, { eventId, happenedAt }) => sb.redateStatusEvent(await requireSession(), eventId, happenedAt));
+    ipcMain.handle('statusEvents:delete', async (_evt, { eventId }) => sb.deleteStatusEvent(await requireSession(), eventId));
     ipcMain.handle('network:list', withSession((s, a) => sb.listNetwork(s, a.kind), []));
     ipcMain.handle('network:search', withSession((s, a) => sb.searchMembers(s, a.query), []));
     ipcMain.handle('network:state', withSession((s, a) => sb.getFollowState(s, a.userId), { followers: 0, i_follow: false, is_me: false }));

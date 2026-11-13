@@ -1040,6 +1040,18 @@ select { display: none; } /* native selects fully replaced by .custom-select com
 .diary-rating-cell { width: 100px; color: #e0b400; font-size: 1.15rem; white-space: nowrap; }
 .diary-heart { color: var(--accent); font-size: 1.3rem; }
 .diary-rewatch-cell, .diary-review-cell { width: 34px; text-align: center; color: var(--gray); font-size: 1.3rem; }
+/* Edit/Delete only on the row you're pointing at, so the table stays calm */
+.diary-actions-cell { width: 140px; text-align: right; }
+.diary-actions-cell .diary-row-actions { justify-content: flex-end; visibility: hidden; }
+.diary-table-row:hover .diary-actions-cell .diary-row-actions, .diary-actions-cell .diary-row-btn:focus-visible { visibility: visible; }
+.diary-ep-label { font-size: 1.05rem; font-weight: 600; color: var(--accent); border: 1.5px solid currentColor; border-radius: 10px; padding: 0.05rem 0.6rem; margin-left: 0.4rem; white-space: nowrap; }
+/* "Started" / "Dropped" moments sit a step back from actual viewings */
+.diary-event-row .diary-film-title { font-weight: 600; color: #555; }
+.diary-event-row .diary-film-cell img { opacity: 0.75; }
+.diary-modal-card.dm.diary-edit-card { width: 44rem; }
+.diary-edit-body { display: flex; flex-direction: column; gap: 0.8rem; padding: 2rem 2.4rem; }
+.diary-edit-body .dm-title { font-size: 1.8rem; margin-bottom: 0.4rem; }
+.diary-edit-body .date-input-wrap { width: 18rem; }
 
 .profile-family-section h3 { font-size: 1.4rem; color: var(--accent); font-weight: 700; margin-bottom: 1rem; }
 .family-empty-note { color: var(--gray); font-size: 1.15rem; margin-bottom: 1.4rem; }

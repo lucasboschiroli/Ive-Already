@@ -809,6 +809,42 @@ async function syncEpisodeLog(entryId, episodeId, watched) {
     } catch (err) { console.error('episode diary log:', err.message); }
 }
 
+// Every whole-title diary row (one per watch / read / play, rewatches
+// included) — the Diary page's rows. Empty if the diary table doesn't exist.
+async function listAllEntryLogs(session) {
+    requireUserId(session);
+    try {
+        return await fetchAllRows((from, to) => getClient().from('entry_logs')
+            .select('id, entry_id, watched_on, started_on, is_rewatch, created_at').is('episode_id', null)
+            .order('id', { ascending: true }).range(from, to));
+    } catch { return []; }
+}
+
+// ---- status history (status-history-migration.sql) ----
+// Rows are written by a database trigger on every status change; the app only
+// reads them, re-dates them (fixing a wrong date) or deletes them. Every read
+// comes back empty if the migration hasn't been run yet.
+async function listStatusEvents(session, entryId = null) {
+    const userId = requireUserId(session);
+    try {
+        return await fetchAllRows((from, to) => {
+            let q = getClient().from('status_events').select('id, entry_id, status, happened_at').eq('user_id', userId);
+            if (entryId != null) q = q.eq('entry_id', entryId);
+            return q.order('id', { ascending: true }).range(from, to);
+        });
+    } catch { return []; }
+}
+async function redateStatusEvent(session, eventId, happenedAt) {
+    requireUserId(session);
+    const { error } = await getClient().from('status_events').update({ happened_at: happenedAt }).eq('id', eventId);
+    if (error) throw error;
+}
+async function deleteStatusEvent(session, eventId) {
+    requireUserId(session);
+    const { error } = await getClient().from('status_events').delete().eq('id', eventId);
+    if (error) throw error;
+}
+
 // All episode diary rows (RLS limits these to your own entries).
 async function listEpisodeLogs(session) {
     requireUserId(session);
@@ -1979,7 +2015,8 @@ async function listListShares(listId) {
 module.exports = {
     getEntryLogCounts,
     followStudio, unfollowStudio, isFollowingStudio, listFollowedStudios,
-    listEntryLogs, addEntryLog, deleteEntryLog,
+    listEntryLogs, addEntryLog, deleteEntryLog, listAllEntryLogs,
+    listStatusEvents, redateStatusEvent, deleteStatusEvent,
     getActivityExtras,
     getTvWatchLog,
     listEpisodeLogs,
