@@ -5471,6 +5471,13 @@ async function openDetails(tmdbId, mediaType, { recordHistory = true } = {}) {
                 e.stopPropagation();
                 const newStatus = btn.dataset.status;
                 try {
+                    // Watched / Rewatched open the log window (date, rating, review);
+                    // its Save sets the status, and closing it changes nothing.
+                    if (await panelApi?.openLogForStatus(newStatus, () => offerTickAllEpisodes(newStatus))) {
+                        menu.classList.add('hidden');
+                        root.classList.remove('open');
+                        return;
+                    }
                     const today = todayISOLocal();
                     // With a diary, the rows own the dates (see applyStatus in setupDetailPanel).
                     const rewatchISO = dateRewatchedInput.wasExplicitlyCleared() ? null : today;
@@ -5829,7 +5836,10 @@ function setupDetailPanel({ details, entryRef, dateStartedInput, dateFinishedInp
     };
 
     // ---------- "I watched…" modal ----------
-    function openLogModal(mode) {
+    // opts.forceStatus: the status picked in the status menu that opened this
+    // (Watched / Rewatched) — applied on Save, so closing the window changes
+    // nothing. opts.onSaved runs after a successful Save.
+    function openLogModal(mode, opts = {}) {
         document.querySelectorAll('.diary-modal').forEach((n) => n.remove());
         const e0 = entryRef.current;
         let rating = e0?.rating || 0;
@@ -5902,6 +5912,9 @@ function setupDetailPanel({ details, entryRef, dateStartedInput, dateFinishedInp
             try {
                 const review = $('dmReview').value.trim() || null;
                 const extra = { rating: rating || null, review, is_favorite: liked, review_spoilers: Boolean(review && $('dmSpoil').checked) };
+                // The diary rows still decide when they can (2+ viewings = Rewatched);
+                // the picked status covers the rest, e.g. Dropped -> Watched.
+                if (opts.forceStatus) extra.status = opts.forceStatus;
                 const dated = $('dmWatched').checked;
                 const rewatch = $('dmBefore').checked;
                 const wantsLog = dated || rewatch;
@@ -5910,7 +5923,7 @@ function setupDetailPanel({ details, entryRef, dateStartedInput, dateFinishedInp
                 await ensureEntry();
                 if (wantsLog) {
                     try {
-                        await addLog({ watchedOn: date, startedOn: started, rewatch: dated ? rewatch : false });
+                        await addLog({ watchedOn: date, startedOn: started, rewatch: dated ? rewatch : false, force: opts.forceStatus === 'rewatched' });
                         await syncEntry(logs, extra);
                     } catch (err) {
                         if (tableOk) throw err;
@@ -5920,6 +5933,7 @@ function setupDetailPanel({ details, entryRef, dateStartedInput, dateFinishedInp
                         if (!dated) { f.status = cur === 'rewatched' ? cur : 'completed'; }
                         else if (rewatch && entryRef.current?.date_finished) { f.status = 'rewatched'; f.date_rewatched = date; }
                         else { f.date_finished = date; f.status = rewatch ? 'rewatched' : (cur === 'rewatched' ? cur : 'completed'); }
+                        if (opts.forceStatus) f.status = opts.forceStatus;
                         if (isTv && started) f.date_started = started;
                         entryRef.current = await upsertEntryAndInvalidate(details.mediaId, f);
                         dateFinishedInput.setISO(entryRef.current.date_finished || null);
@@ -5929,6 +5943,7 @@ function setupDetailPanel({ details, entryRef, dateStartedInput, dateFinishedInp
                     const f = { ...extra };
                     const st = entryRef.current?.status;
                     if ((rating || review) && (!st || st === 'planned')) f.status = details.media_type === 'movie' ? 'completed' : 'in_progress';
+                    if (opts.forceStatus) f.status = opts.forceStatus;
                     entryRef.current = await upsertEntryAndInvalidate(details.mediaId, f);
                 }
                 // keep the "Your Rating & Review" box on the page in step
@@ -5940,6 +5955,7 @@ function setupDetailPanel({ details, entryRef, dateStartedInput, dateFinishedInp
                 paintStatusButtons();
                 showToast('Saved!');
                 close();
+                opts.onSaved?.();
             } catch (err) {
                 console.error('diary save failed:', err);
                 showToast(`Couldn't save: ${err.message}`, true);
@@ -6086,7 +6102,19 @@ function setupDetailPanel({ details, entryRef, dateStartedInput, dateFinishedInp
     paint();
     panelEl.classList.remove('hidden');
     loaded.then(paint);
-    return { paint, editEntryDate, applyStatus, refresh: () => refreshLogs().then(paint) };
+    // The status menu's Watched / Rewatched open the log window, so the viewing
+    // gets a real date (plus rating/review) instead of an empty stamp. Watched on
+    // a title that already has viewings is just a status change — returns false
+    // and the caller saves it directly.
+    async function openLogForStatus(status, onSaved) {
+        if (status !== 'completed' && status !== 'rewatched') return false;
+        await refreshLogs();
+        if (status === 'completed' && rows().length) return false;
+        openLogModal(status === 'rewatched' ? 'again' : 'log', { forceStatus: status, onSaved });
+        return true;
+    }
+
+    return { paint, editEntryDate, applyStatus, openLogForStatus, refresh: () => refreshLogs().then(paint) };
 }
 
 // "Add to list" — a Spotify "Add to playlist"-style dropdown under the
