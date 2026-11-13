@@ -2492,7 +2492,7 @@ function createDateInput({ container, initialISO, onChange }) {
                 <span>${monthName}</span>
                 <button type="button" class="date-cal-nav" data-dir="1">&#10095;</button>
             </div>
-            <div class="date-cal-weekdays">${['Mo','Tu','We','Th','Fr','Sa','Su'].map((d) => `<span>${d}</span>`).join('')}</div>
+            <div class="date-cal-weekdays">${['Su','Mo','Tu','We','Th','Fr','Sa'].map((d) => `<span>${d}</span>`).join('')}</div>
             <div class="date-cal-grid">${cells}</div>
             <div class="date-cal-footer">
                 <button type="button" class="date-cal-clear${!currentISO ? ' active' : ''}">No Date</button>
