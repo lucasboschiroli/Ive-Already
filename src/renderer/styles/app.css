@@ -2028,6 +2028,10 @@ select { display: none; } /* native selects fully replaced by .custom-select com
 .panel-tile.queued { background: #f97316; border-color: transparent; color: #fff; }
 .panel-tile.queued:hover { color: #fff; opacity: 0.92; }
 .panel-rated { text-align: center; padding: 1rem 1.2rem 1.2rem; border-top: 1px solid rgba(0,0,0,0.1); }
+.panel-started { display: flex; flex-direction: column; align-items: center; gap: 0.5rem; padding: 1rem 1.2rem 1.2rem; border-top: 1px solid rgba(0,0,0,0.1); }
+.panel-started.hidden { display: none; }
+.panel-started-label { font-size: 1.2rem; color: var(--gray); }
+.panel-started .date-input-wrap { width: 17rem; }
 .panel-rated-label { font-size: 1.2rem; color: var(--gray); margin-bottom: 0.4rem; }
 .panel-stars .star-wrap { font-size: 2.6rem; }
 .panel-row, .detail-panel .list-add-dropdown-trigger {

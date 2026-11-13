@@ -1780,6 +1780,31 @@ function entryFieldsFromLogs(list, currentStatus, isTv) {
     return fields;
 }
 
+// One "started" date per title, wherever it's edited from (the title panel or
+// a Started row on the Diary page): the entry's date_started (Home, Stats…),
+// the first "Started" moment in the status history, and — for shows — the
+// diary row that carries the start date (or the next diary save would put the
+// old date back). iso null clears the entry's date only; history stays dated.
+// Returns the updated entry.
+async function setTitleStartDate(entry, iso) {
+    const old = entry.date_started;
+    const updated = await upsertEntryAndInvalidate(entry.media_id, { date_started: iso });
+    if (iso) {
+        const starts = (await window.api.listStatusEvents(entry.id).catch(() => []))
+            .filter((ev) => ev.status === 'in_progress').sort((a, b) => a.happened_at.localeCompare(b.happened_at));
+        if (starts[0]) await window.api.redateStatusEvent(starts[0].id, eventTimestampFor(iso));
+    }
+    if (entry.media_type === 'tv' && old) {
+        const logs = await window.api.listEntryLogs(entry.id).catch(() => []);
+        const carrier = logs.find((l) => l.started_on === old);
+        if (carrier) {
+            await window.api.addEntryLog({ entryId: entry.id, watchedOn: carrier.watched_on, startedOn: iso, isRewatch: carrier.is_rewatch });
+            await window.api.deleteEntryLog(carrier.id);
+        }
+    }
+    return updated;
+}
+
 // A status event's moment as a local calendar date (yyyy-mm-dd) — events are
 // stored in UTC, so a change at 11pm here must not show as the next day.
 function eventLocalISO(happenedAt) {
@@ -1886,6 +1911,14 @@ async function changeDiaryLog(entry, target, changes) {
     await upsertEntryAndInvalidate(entry.media_id, entryFieldsFromLogs(logs, entry.status, entry.media_type === 'tv'));
 }
 
+// Is this Diary row the title's earliest "Started" moment?
+async function isFirstStart(item) {
+    if (item.diary_event?.status !== 'in_progress') return false;
+    const starts = (await window.api.listStatusEvents(item.entry.id)).filter((ev) => ev.status === 'in_progress')
+        .sort((a, b) => a.happened_at.localeCompare(b.happened_at));
+    return starts[0]?.id === item.diary_event.id;
+}
+
 async function refreshDiaryPage(message) {
     profileAllEntries = await getAllEntriesCached();
     renderProfileTab('diary');
@@ -1902,8 +1935,13 @@ async function deleteDiaryRow(item) {
     const ok = await showConfirm(`Delete ${diaryRowDescription(item)} for "${item.title}" from your diary?`, { confirmLabel: 'Delete' });
     if (!ok) return;
     try {
-        if (item.diary_kind === 'event') await window.api.deleteStatusEvent(item.diary_event.id);
-        else await changeDiaryLog(item.entry, item.diary_log, null);
+        if (item.diary_kind === 'event') {
+            // Removing the first "Started" also clears the title's start date when it's the same day.
+            if (await isFirstStart(item) && item.entry.date_started === item.date_finished) await setTitleStartDate(item.entry, null);
+            await window.api.deleteStatusEvent(item.diary_event.id);
+        } else {
+            await changeDiaryLog(item.entry, item.diary_log, null);
+        }
         await refreshDiaryPage('Removed from your diary');
     } catch (err) {
         showToast(`Couldn't delete: ${ipcErrorText(err)}`, true);
@@ -1941,7 +1979,9 @@ function openDiaryRowEditor(item) {
             if (isEvent) {
                 const iso = watched.getISO();
                 if (!iso) throw new Error('Pick a date — to remove it, use Delete instead');
-                await window.api.redateStatusEvent(item.diary_event.id, eventTimestampFor(iso));
+                // The first "Started" is the title's start date — keep both in step.
+                if (await isFirstStart(item)) await setTitleStartDate(item.entry, iso);
+                else await window.api.redateStatusEvent(item.diary_event.id, eventTimestampFor(iso));
             } else {
                 const changes = { watched_on: watched.getISO() || null, is_rewatch: overlay.querySelector('.dre-rewatch').checked };
                 if (started) changes.started_on = started.getISO() || null;
@@ -5759,6 +5799,39 @@ function setupDetailPanel({ details, entryRef, dateStartedInput, dateFinishedInp
     const flyout = document.getElementById('panelFlyout');
     const activityBtn = document.getElementById('panelActivityBtn');
     const shareBtn = document.getElementById('panelShareBtn');
+    const startedHost = document.getElementById('panelStarted');
+    let startedInput = null; // built once, then only re-valued, so a repaint never closes an open calendar
+
+    // "Started watching / reading / playing" — the one place a title's start
+    // date is shown and edited (see setTitleStartDate). Movies have no
+    // "Watching" status, so they don't get it.
+    function paintStarted() {
+        if (!startedHost) return;
+        const e = entryRef.current;
+        const show = details.media_type !== 'movie' && e && (e.date_started || (e.status && e.status !== 'planned'));
+        startedHost.classList.toggle('hidden', !show);
+        if (!show) return;
+        if (!startedInput) {
+            const verb = details.media_type === 'book' ? 'reading' : details.media_type === 'game' ? 'playing' : 'watching';
+            startedHost.innerHTML = `<span class="panel-started-label">Started ${verb}</span><div class="panel-started-date"></div>`;
+            startedInput = createDateInput({
+                container: startedHost.querySelector('.panel-started-date'),
+                initialISO: e.date_started || null,
+                onChange: async (iso) => {
+                    try {
+                        entryRef.current = await setTitleStartDate({ ...entryRef.current, media_type: details.media_type }, iso);
+                        dateStartedInput?.setISO(iso);
+                        await refreshLogs(); // a show's start date can live on a diary row too
+                        showToast('Saved!');
+                    } catch (err) {
+                        showToast(`Couldn't save: ${ipcErrorText(err)}`, true);
+                    }
+                },
+            });
+        } else if (startedInput.getISO() !== (e.date_started || null)) {
+            startedInput.setISO(e.date_started || null);
+        }
+    }
 
     function paintStars(container, rating) {
         container.querySelectorAll('.star-wrap').forEach((wrap, i) => {
@@ -5807,6 +5880,7 @@ function setupDetailPanel({ details, entryRef, dateStartedInput, dateFinishedInp
         activityBtn.classList.toggle('hidden', !(logged || e?.rating || e?.review));
         const hasReview = Boolean(e?.review);
         flyout.innerHTML = `<button type="button" data-act="again">Log again…</button><button type="button" data-act="review">${hasReview ? 'Edit review…' : 'Add a review…'}</button>`;
+        paintStarted();
         flyout.classList.add('hidden');
     }
 
