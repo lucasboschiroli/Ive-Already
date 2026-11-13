@@ -97,6 +97,21 @@ end $_$;
 ALTER FUNCTION "public"."ensure_favorites_list"("p_user" "uuid") OWNER TO "postgres";
 
 
+CREATE OR REPLACE FUNCTION "public"."entries_record_status"() RETURNS "trigger"
+    LANGUAGE "plpgsql" SECURITY DEFINER
+    SET "search_path" TO 'public'
+    AS $$
+begin
+    if tg_op = 'INSERT' or new.status is distinct from old.status then
+        insert into public.status_events (entry_id, user_id, status) values (new.id, new.user_id, new.status);
+    end if;
+    return new;
+end $$;
+
+
+ALTER FUNCTION "public"."entries_record_status"() OWNER TO "postgres";
+
+
 CREATE OR REPLACE FUNCTION "public"."entries_sync_favorites"() RETURNS "trigger"
     LANGUAGE "plpgsql" SECURITY DEFINER
     SET "search_path" TO 'public'
@@ -960,6 +975,30 @@ ALTER TABLE "public"."season_meta" ALTER COLUMN "id" ADD GENERATED ALWAYS AS IDE
 
 
 
+CREATE TABLE IF NOT EXISTS "public"."status_events" (
+    "id" bigint NOT NULL,
+    "entry_id" bigint NOT NULL,
+    "user_id" "uuid" DEFAULT "auth"."uid"() NOT NULL,
+    "status" "text" NOT NULL,
+    "happened_at" timestamp with time zone DEFAULT "now"() NOT NULL,
+    CONSTRAINT "status_events_status_check" CHECK (("status" = ANY (ARRAY['planned'::"text", 'in_progress'::"text", 'completed'::"text", 'dropped'::"text", 'rewatched'::"text"])))
+);
+
+
+ALTER TABLE "public"."status_events" OWNER TO "postgres";
+
+
+ALTER TABLE "public"."status_events" ALTER COLUMN "id" ADD GENERATED ALWAYS AS IDENTITY (
+    SEQUENCE NAME "public"."status_events_id_seq"
+    START WITH 1
+    INCREMENT BY 1
+    NO MINVALUE
+    NO MAXVALUE
+    CACHE 1
+);
+
+
+
 CREATE TABLE IF NOT EXISTS "public"."studio_follows" (
     "id" bigint NOT NULL,
     "user_id" "uuid" NOT NULL,
@@ -1200,6 +1239,11 @@ ALTER TABLE ONLY "public"."season_meta"
 
 
 
+ALTER TABLE ONLY "public"."status_events"
+    ADD CONSTRAINT "status_events_pkey" PRIMARY KEY ("id");
+
+
+
 ALTER TABLE ONLY "public"."studio_follows"
     ADD CONSTRAINT "studio_follows_pkey" PRIMARY KEY ("id");
 
@@ -1270,6 +1314,18 @@ CREATE UNIQUE INDEX "lists_share_token_key" ON "public"."lists" USING "btree" ("
 
 
 CREATE INDEX "official_list_items_list_idx" ON "public"."official_list_items" USING "btree" ("list_id", "position");
+
+
+
+CREATE INDEX "status_events_entry_idx" ON "public"."status_events" USING "btree" ("entry_id", "happened_at");
+
+
+
+CREATE INDEX "status_events_user_idx" ON "public"."status_events" USING "btree" ("user_id", "happened_at");
+
+
+
+CREATE OR REPLACE TRIGGER "entries_record_status_trg" AFTER INSERT OR UPDATE OF "status" ON "public"."entries" FOR EACH ROW EXECUTE FUNCTION "public"."entries_record_status"();
 
 
 
@@ -1472,6 +1528,16 @@ ALTER TABLE ONLY "public"."profiles"
 
 ALTER TABLE ONLY "public"."season_meta"
     ADD CONSTRAINT "season_meta_media_id_fkey" FOREIGN KEY ("media_id") REFERENCES "public"."media"("id") ON DELETE CASCADE;
+
+
+
+ALTER TABLE ONLY "public"."status_events"
+    ADD CONSTRAINT "status_events_entry_id_fkey" FOREIGN KEY ("entry_id") REFERENCES "public"."entries"("id") ON DELETE CASCADE;
+
+
+
+ALTER TABLE ONLY "public"."status_events"
+    ADD CONSTRAINT "status_events_user_id_fkey" FOREIGN KEY ("user_id") REFERENCES "auth"."users"("id") ON DELETE CASCADE;
 
 
 
@@ -1844,6 +1910,21 @@ CREATE POLICY "season_meta writable by authenticated users" ON "public"."season_
 
 
 
+ALTER TABLE "public"."status_events" ENABLE ROW LEVEL SECURITY;
+
+
+CREATE POLICY "status_events delete own" ON "public"."status_events" FOR DELETE TO "authenticated" USING (("user_id" = "auth"."uid"()));
+
+
+
+CREATE POLICY "status_events select own" ON "public"."status_events" FOR SELECT TO "authenticated" USING (("user_id" = "auth"."uid"()));
+
+
+
+CREATE POLICY "status_events update own" ON "public"."status_events" FOR UPDATE TO "authenticated" USING (("user_id" = "auth"."uid"())) WITH CHECK (("user_id" = "auth"."uid"()));
+
+
+
 ALTER TABLE "public"."studio_follows" ENABLE ROW LEVEL SECURITY;
 
 
@@ -1905,6 +1986,12 @@ GRANT ALL ON FUNCTION "public"."delete_my_account"() TO "service_role";
 GRANT ALL ON FUNCTION "public"."ensure_favorites_list"("p_user" "uuid") TO "anon";
 GRANT ALL ON FUNCTION "public"."ensure_favorites_list"("p_user" "uuid") TO "authenticated";
 GRANT ALL ON FUNCTION "public"."ensure_favorites_list"("p_user" "uuid") TO "service_role";
+
+
+
+GRANT ALL ON FUNCTION "public"."entries_record_status"() TO "anon";
+GRANT ALL ON FUNCTION "public"."entries_record_status"() TO "authenticated";
+GRANT ALL ON FUNCTION "public"."entries_record_status"() TO "service_role";
 
 
 
@@ -2259,6 +2346,22 @@ GRANT ALL ON TABLE "public"."season_meta" TO "service_role";
 GRANT ALL ON SEQUENCE "public"."season_meta_id_seq" TO "anon";
 GRANT ALL ON SEQUENCE "public"."season_meta_id_seq" TO "authenticated";
 GRANT ALL ON SEQUENCE "public"."season_meta_id_seq" TO "service_role";
+
+
+
+GRANT SELECT,REFERENCES,DELETE,TRIGGER,TRUNCATE,MAINTAIN ON TABLE "public"."status_events" TO "anon";
+GRANT SELECT,REFERENCES,DELETE,TRIGGER,TRUNCATE,MAINTAIN ON TABLE "public"."status_events" TO "authenticated";
+GRANT ALL ON TABLE "public"."status_events" TO "service_role";
+
+
+
+GRANT UPDATE("happened_at") ON TABLE "public"."status_events" TO "authenticated";
+
+
+
+GRANT ALL ON SEQUENCE "public"."status_events_id_seq" TO "anon";
+GRANT ALL ON SEQUENCE "public"."status_events_id_seq" TO "authenticated";
+GRANT ALL ON SEQUENCE "public"."status_events_id_seq" TO "service_role";
 
 
 

@@ -15,6 +15,7 @@
 --     Nothing older than that can be recovered.
 --
 -- Run once in the Supabase SQL editor. Safe to re-run.
+-- Applied to the live project on 2026-11-13 (already in schema.sql).
 
 create table if not exists public.status_events (
     id bigint generated always as identity primary key,
