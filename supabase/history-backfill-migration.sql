@@ -17,6 +17,7 @@
 --
 -- Run once in the Supabase SQL editor. Safe to re-run: every insert checks
 -- that the row it would add doesn't exist yet.
+-- Applied to the live project on 2026-11-13 (data only — schema.sql unchanged).
 
 -- ---------- diary rows ----------
 
