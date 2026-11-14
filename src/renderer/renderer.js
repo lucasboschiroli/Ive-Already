@@ -5850,7 +5850,8 @@ function setupDetailPanel({ details, entryRef, dateStartedInput, dateFinishedInp
         const st = e?.status;
         const logged = list.length > 0 || st === 'completed' || st === 'rewatched';
         logBtn.textContent = logged ? 'Log again / add review…' : 'Log in the Diary';
-        activityBtn.classList.toggle('hidden', !(logged || e?.rating || e?.review));
+        // Every title in your library has a story (added, started, episodes, achievements…), not just finished ones.
+        activityBtn.classList.toggle('hidden', !e);
         const hasReview = Boolean(e?.review);
         flyout.innerHTML = `<button type="button" data-act="again">Log again…</button><button type="button" data-act="review">${hasReview ? 'Edit review…' : 'Add a review…'}</button>`;
         flyout.classList.add('hidden');
@@ -6013,8 +6014,22 @@ function setupDetailPanel({ details, entryRef, dateStartedInput, dateFinishedInp
     // ---------- "Your activity for…" ----------
     async function openActivityModal() {
         await refreshLogs(); // show what's really saved, not what this page loaded with
-        // Status history (status-history-migration.sql) — empty before that's run.
-        const events = entryRef.current ? await window.api.listStatusEvents(entryRef.current.id).catch(() => []) : [];
+        // Everything else that happened to this title, Steam-style: the status
+        // history (watchlist / started / dropped), each episode ticked, and each
+        // achievement unlocked. Each part is optional and fails soft.
+        const entryId = entryRef.current?.id;
+        const isGame = details.media_type === 'game';
+        // Achievement names come from RAWG, which can be slow or down — don't hold the window for them.
+        const namesWithin = (ms) => Promise.race([
+            window.api.getGameAchievements(details.tmdb_id).then((list) => Object.fromEntries((list || []).map((a) => [a.id, a.name]))),
+            new Promise((r) => setTimeout(() => r({}), ms)),
+        ]).catch(() => ({}));
+        const [events, episodeLogs, unlocks, achievementNames] = await Promise.all([
+            entryId ? window.api.listStatusEvents(entryId).catch(() => []) : [],
+            isTv && entryId ? window.api.listEpisodeLogs(entryId).catch(() => []) : [],
+            isGame && entryId ? window.api.listAchievementUnlocks(details.mediaId).catch(() => []) : [],
+            isGame && entryId ? namesWithin(1200) : {},
+        ]);
         document.querySelectorAll('.diary-modal').forEach((n) => n.remove());
         const overlay = document.createElement('div');
         overlay.className = 'diary-modal';
@@ -6045,14 +6060,38 @@ function setupDetailPanel({ details, entryRef, dateStartedInput, dateFinishedInp
             if (tab === 'activity') {
                 // Viewings come from the diary; added/started/dropped from the
                 // status history (its finished/rewatched moments would repeat the diary).
+                // Episodes and achievements from the same day are one line each, so a binge doesn't flood it.
+                const byDay = (items, dayOf) => {
+                    const groups = new Map();
+                    for (const it of items) {
+                        const day = dayOf(it);
+                        if (!day) continue;
+                        if (!groups.has(day)) groups.set(day, []);
+                        groups.get(day).push(it);
+                    }
+                    return [...groups.entries()];
+                };
                 const timeline = [
                     ...list.map((l) => ({ kind: 'log', log: l, day: l.watched_on || String(l.created_at || '').slice(0, 10), at: l.watched_on || l.created_at })),
                     ...events.filter((ev) => ['planned', 'in_progress', 'dropped'].includes(ev.status))
                         .map((ev) => ({ kind: 'event', ev, day: eventLocalISO(ev.happened_at), at: ev.happened_at })),
+                    ...byDay(episodeLogs, (l) => l.watched_on).map(([day, eps]) => ({ kind: 'episodes', eps, day, at: eps.map((x) => x.created_at || day).sort().pop() })),
+                    ...byDay(unlocks, (u) => u.unlocked_at && eventLocalISO(u.unlocked_at)).map(([day, achs]) => ({ kind: 'achievements', achs, day, at: achs.map((x) => x.unlocked_at).sort().pop() })),
                 ].sort((a, b) => b.day.localeCompare(a.day) || String(b.at).localeCompare(String(a.at)));
+                const someOf = (labels) => (labels.length > 4 ? `${labels.slice(0, 4).join(', ')} +${labels.length - 4} more` : labels.join(', '));
                 const verbs = details.media_type === 'game' ? ['playing', 'Playlist'] : details.media_type === 'book' ? ['reading', 'Readlist'] : ['watching', 'Watchlist'];
                 let firstLog = true;
                 let html = timeline.map((t) => {
+                    if (t.kind === 'episodes') {
+                        const n = t.eps.length;
+                        const labels = [...t.eps].sort((a, b) => a.id - b.id).map((x) => escapeHtml((x.episode_label || 'Episode').split(' · ')[0]));
+                        return `<div class="act-row"><div class="act-row-text"><b class="act-who">You</b> watched ${n === 1 ? `${labels[0]} of` : `${n} episodes of`} <b>${escapeHtml(details.title)}</b> <span class="act-dim">on ${activityDate(t.day)}${n > 1 ? ` · ${someOf(labels)}` : ''}</span></div><span class="act-ago">${activityAgo(t.at)}</span></div>`;
+                    }
+                    if (t.kind === 'achievements') {
+                        const n = t.achs.length;
+                        const names = t.achs.map((a) => achievementNames[a.achievement_id]).filter(Boolean).map(escapeHtml);
+                        return `<div class="act-row"><div class="act-row-text"><b class="act-who">You</b> unlocked ${n === 1 ? (names[0] ? `<b>${names[0]}</b> in` : 'an achievement in') : `${n} achievements in`} <b>${escapeHtml(details.title)}</b> <span class="act-dim">on ${activityDate(t.day)}${n > 1 && names.length ? ` · ${someOf(names)}` : ''}</span></div><span class="act-ago">${activityAgo(t.at)}</span></div>`;
+                    }
                     if (t.kind === 'event') {
                         const what = t.ev.status === 'planned' ? `added <b>${escapeHtml(details.title)}</b> to your ${verbs[1]}`
                             : t.ev.status === 'in_progress' ? `started ${verbs[0]} <b>${escapeHtml(details.title)}</b>` : `dropped <b>${escapeHtml(details.title)}</b>`;
@@ -6065,7 +6104,7 @@ function setupDetailPanel({ details, entryRef, dateStartedInput, dateFinishedInp
                     return `<div class="act-row"><div class="act-row-text"><b class="act-who">You</b> ${verb}${lead && e?.rating ? ' and rated' : ''} <b>${escapeHtml(details.title)}</b>${lead ? stars + heart : ''}${l.watched_on ? ` <span class="act-dim">on ${activityDate(l.watched_on)}</span>` : ''}</div><span class="act-ago">${activityAgo(t.at)}</span></div>`;
                 }).join('');
                 if (!timeline.length && (e?.rating || e?.is_favorite)) html = `<div class="act-row"><div class="act-row-text"><b class="act-who">You</b> ${e.rating ? 'rated' : 'liked'} <b>${escapeHtml(details.title)}</b>${stars}${heart}</div></div>`;
-                body.innerHTML = `${html}<div class="act-end">End of recent activity</div>`;
+                body.innerHTML = html ? `${html}<div class="act-end">End of recent activity</div>` : '<div class="act-end">Nothing recorded for this title yet</div>';
             } else if (tab === 'diary') {
                 diaryList = list;
                 const actions = tableOk ? `<span class="diary-row-actions"><button type="button" class="diary-row-btn" data-act="edit">Edit</button><button type="button" class="diary-row-btn" data-act="delete">Delete</button></span>` : '';

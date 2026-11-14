@@ -299,7 +299,8 @@ function registerHandlers() {
     }, {}));
     ipcMain.handle('games:unlocked', withSession((s, a) => sb.getUnlockedAchievements(s, a.mediaId), []));
     ipcMain.handle('games:setUnlocked', withSession((s, a) => sb.setAchievementUnlocked(s, a.mediaId, a.achievementId, a.unlocked), false));
-    ipcMain.handle('diary:episodes', withSession((s) => sb.listEpisodeLogs(s), []));
+    ipcMain.handle('diary:episodes', withSession((s, a) => sb.listEpisodeLogs(s, a.entryId ?? null), []));
+    ipcMain.handle('games:unlocks', withSession((s, a) => sb.listAchievementUnlocks(s, a.mediaId), []));
     ipcMain.handle('diary:list', withSession((s, a) => sb.listEntryLogs(s, a.entryId), []));
     ipcMain.handle('diary:add', withSession((s, a) => sb.addEntryLog(s, a), null));
     ipcMain.handle('diary:delete', withSession((s, a) => sb.deleteEntryLog(s, a.logId), null));

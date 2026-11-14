@@ -846,13 +846,26 @@ async function deleteStatusEvent(session, eventId) {
 }
 
 // All episode diary rows (RLS limits these to your own entries).
-async function listEpisodeLogs(session) {
+// entryId narrows it to one show (its activity timeline).
+async function listEpisodeLogs(session, entryId = null) {
     requireUserId(session);
     try {
-        return await fetchAllRows((from, to) => getClient().from('entry_logs')
-            .select('id, entry_id, watched_on, episode_id, episode_label').not('episode_id', 'is', null)
-            .order('id', { ascending: true }).range(from, to));
+        return await fetchAllRows((from, to) => {
+            let q = getClient().from('entry_logs')
+                .select('id, entry_id, watched_on, episode_id, episode_label, created_at').not('episode_id', 'is', null);
+            if (entryId != null) q = q.eq('entry_id', entryId);
+            return q.order('id', { ascending: true }).range(from, to);
+        });
     } catch { return []; }
+}
+
+// When each achievement of a game was ticked (its activity timeline).
+async function listAchievementUnlocks(session, mediaId) {
+    const userId = requireUserId(session);
+    const { data, error } = await getClient().from('game_achievements')
+        .select('achievement_id, unlocked_at').eq('user_id', userId).eq('media_id', mediaId);
+    if (error) return [];
+    return data || [];
 }
 
 // Every completed TV show in the library — used by the background
@@ -2103,6 +2116,7 @@ module.exports = {
     setEpisodesWatched,
     getWatchedEpisodeIds,
     getUnlockedAchievements,
+    listAchievementUnlocks,
     getUnlockedCounts,
     setAchievementUnlocked,
     getLastWatchedSeason,
