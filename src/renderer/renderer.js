@@ -5882,9 +5882,14 @@ function setupDetailPanel({ details, entryRef, dateStartedInput, dateFinishedInp
 
         const list = rows();
         const st = e?.status;
-        // An open entry (still watching) isn't a finished viewing — "Log in the Diary" finishes it.
+        // An open entry (still watching) isn't a finished viewing; the button says
+        // where you are in it, and finishes it (start already filled in).
         const logged = list.some((l) => !isOpenLog(l)) || st === 'completed' || st === 'rewatched';
-        logBtn.textContent = logged ? 'Log again / add review…' : 'Log in the Diary';
+        const open = list.find(isOpenLog);
+        const ongoingVerb = details.media_type === 'book' ? 'Reading' : details.media_type === 'game' ? 'Playing' : 'Watching';
+        logBtn.textContent = open && st === 'in_progress'
+            ? `${ongoingVerb} since ${new Date(`${open.started_on}T12:00:00`).toLocaleDateString('en-GB', { day: 'numeric', month: 'short' })} · Log the finish`
+            : logged ? 'Log again / add review…' : 'Log in the Diary';
         // Every title in your library has a story (added, started, episodes, achievements…), not just finished ones.
         activityBtn.classList.toggle('hidden', !e);
         const hasReview = Boolean(e?.review);
@@ -5895,6 +5900,8 @@ function setupDetailPanel({ details, entryRef, dateStartedInput, dateFinishedInp
     logBtn.onclick = (ev) => {
         ev.stopPropagation();
         const e = entryRef.current;
+        // In the middle of one (a rewatch too): the button finishes it.
+        if (e?.status === 'in_progress' && rows().some(isOpenLog)) { openLogModal('log', { forceStatus: 'completed' }); return; }
         const logged = rows().some((l) => !isOpenLog(l)) || e?.status === 'completed' || e?.status === 'rewatched';
         if (!logged) { openLogModal('log'); return; }
         flyout.classList.toggle('hidden');
