@@ -18,6 +18,7 @@
 -- Also opens an entry now for every show/book/game you're in the middle of.
 --
 -- Run once in the Supabase SQL editor. Safe to re-run.
+-- Applied to the live project on 2026-11-16 (already in schema.sql).
 
 create or replace function public.entries_sync_open_log() returns trigger
     language plpgsql security definer

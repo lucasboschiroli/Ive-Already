@@ -9,6 +9,8 @@
 -- Episodes ticked while you were actually watching the show are untouched,
 -- and so are the ticks themselves (watched_episodes) — only the diary rows go.
 --
+-- Run on the live project on 2026-11-16 (one-off; data only).
+--
 -- Step 1: PREVIEW. Run just this SELECT first to see what would be removed.
 
 select m.title, l.watched_on, count(*) as episode_rows

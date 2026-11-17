@@ -140,6 +140,55 @@ end $$;
 ALTER FUNCTION "public"."entries_sync_favorites"() OWNER TO "postgres";
 
 
+CREATE OR REPLACE FUNCTION "public"."entries_sync_open_log"() RETURNS "trigger"
+    LANGUAGE "plpgsql" SECURITY DEFINER
+    SET "search_path" TO 'public'
+    AS $$
+declare
+    v_type text;
+    v_open public.entry_logs%rowtype;
+    v_has_logs boolean;
+    v_today date := (now() at time zone 'UTC')::date;
+begin
+    if tg_op = 'UPDATE' and new.status is not distinct from old.status then return new; end if;
+    select media_type into v_type from public.media where id = new.media_id;
+    if v_type is null or v_type = 'movie' then return new; end if;
+
+    select * into v_open from public.entry_logs
+        where entry_id = new.id and episode_id is null and watched_on is null and started_on is not null
+        order by id desc limit 1;
+
+    if new.status = 'in_progress' then
+        if v_open.id is null then
+            select exists (select 1 from public.entry_logs where entry_id = new.id and episode_id is null) into v_has_logs;
+            -- A finish that only lived on the title becomes a real diary row first,
+            -- so starting again doesn't hide it.
+            if not v_has_logs and new.date_finished is not null then
+                insert into public.entry_logs (entry_id, watched_on, started_on, is_rewatch)
+                values (new.id, new.date_finished, null, false);
+                v_has_logs := true;
+            end if;
+            -- The title's start date if it belongs to this watch-through, else today.
+            insert into public.entry_logs (entry_id, watched_on, started_on, is_rewatch)
+            values (new.id, null,
+                    coalesce(case when new.date_finished is null or new.date_started > new.date_finished then new.date_started end, v_today),
+                    v_has_logs);
+        end if;
+    elsif new.status in ('completed', 'rewatched') and v_open.id is not null then
+        update public.entry_logs set watched_on = case
+                when new.date_rewatched >= v_open.started_on then new.date_rewatched
+                when new.date_finished >= v_open.started_on then new.date_finished
+                else greatest(v_today, v_open.started_on)
+            end
+        where id = v_open.id;
+    end if;
+    return new;
+end $$;
+
+
+ALTER FUNCTION "public"."entries_sync_open_log"() OWNER TO "postgres";
+
+
 CREATE OR REPLACE FUNCTION "public"."episodes_validate"() RETURNS "trigger"
     LANGUAGE "plpgsql"
     AS $_$
@@ -1337,6 +1386,10 @@ CREATE OR REPLACE TRIGGER "entries_sync_favorites_trg" AFTER INSERT OR DELETE OR
 
 
 
+CREATE OR REPLACE TRIGGER "entries_sync_open_log_trg" AFTER INSERT OR UPDATE OF "status" ON "public"."entries" FOR EACH ROW EXECUTE FUNCTION "public"."entries_sync_open_log"();
+
+
+
 CREATE OR REPLACE TRIGGER "episodes_validate_trg" BEFORE INSERT OR UPDATE ON "public"."episodes" FOR EACH ROW EXECUTE FUNCTION "public"."episodes_validate"();
 
 
@@ -1998,6 +2051,12 @@ GRANT ALL ON FUNCTION "public"."entries_record_status"() TO "service_role";
 GRANT ALL ON FUNCTION "public"."entries_sync_favorites"() TO "anon";
 GRANT ALL ON FUNCTION "public"."entries_sync_favorites"() TO "authenticated";
 GRANT ALL ON FUNCTION "public"."entries_sync_favorites"() TO "service_role";
+
+
+
+GRANT ALL ON FUNCTION "public"."entries_sync_open_log"() TO "anon";
+GRANT ALL ON FUNCTION "public"."entries_sync_open_log"() TO "authenticated";
+GRANT ALL ON FUNCTION "public"."entries_sync_open_log"() TO "service_role";
 
 
 
