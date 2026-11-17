@@ -5948,9 +5948,9 @@ function setupDetailPanel({ details, entryRef, dateStartedInput, dateFinishedInp
                     <div class="dm-main">
                         <div class="dm-title">${escapeHtml(details.title)} <span class="dm-year">${year}</span></div>
                         <div class="dm-dates">
+                            ${continuous ? '<span class="dm-date-label">Started on</span><div id="dmStartedHost"></div>' : ''}
                             <label class="diary-check"><input type="checkbox" id="dmWatched" ${mode === 'review' ? '' : 'checked'}><span class="diary-box-mark"></span><span>${continuous ? 'Finished on' : `${past} on`}</span></label>
                             <div id="dmWatchedHost"></div>
-                            ${continuous ? '<span class="dm-sub">Started on</span><div id="dmStartedHost"></div>' : ''}
                             <label class="diary-check dm-before"><input type="checkbox" id="dmBefore" ${(mode === 'again' || (mode !== 'review' && hadLogs)) ? 'checked' : ''}><span class="diary-box-mark"></span><span>I've ${pastLower} this before</span></label>
                         </div>
                         <textarea id="dmReview" class="dm-review" placeholder="Add a review…"></textarea>

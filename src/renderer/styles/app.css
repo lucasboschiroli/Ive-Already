@@ -2063,8 +2063,12 @@ select { display: none; } /* native selects fully replaced by .custom-select com
 .dm-main { flex: 1; min-width: 0; }
 .dm-title { font-size: 2.4rem; font-weight: 700; margin-bottom: 1.2rem; }
 .dm-year { font-weight: 400; color: var(--gray); font-size: 1.8rem; }
-.dm-dates { display: flex; align-items: center; flex-wrap: wrap; gap: 1.2rem 1.8rem; margin-bottom: 1.4rem; }
+/* Labels left, dates right: (Started on) / Finished on / I've watched this before */
+.dm-dates { display: grid; grid-template-columns: max-content max-content; align-items: center; gap: 1.2rem 1.8rem; margin-bottom: 1.4rem; }
 .dm-dates .diary-check { margin: 0; }
+.dm-dates .dm-before { grid-column: 1 / -1; }
+/* lines up with the "Finished on" text next to its checkbox (22px box + gap) */
+.dm-date-label { padding-left: calc(22px + 1rem); font-size: 1.35rem; color: #1a1a1a; }
 .dm-sub { font-size: 1.3rem; color: #444; }
 .dm-review { width: 100%; box-sizing: border-box; height: 14rem; resize: vertical; border: 1.5px solid #ddd; border-radius: 10px; padding: 1.2rem; font: inherit; font-size: 1.4rem; background: #f7f7f7; }
 .dm-review:focus { outline: none; border-color: var(--accent); }
