@@ -628,13 +628,17 @@ async function getEntryLogCounts(session) {
     try {
         let rows;
         try {
-            rows = await fetchAllRows((from, to) => getClient().from('entry_logs').select('id, entry_id, episode_id').order('id', { ascending: true }).range(from, to));
+            rows = await fetchAllRows((from, to) => getClient().from('entry_logs').select('id, entry_id, episode_id, watched_on, started_on').order('id', { ascending: true }).range(from, to));
         } catch {
             rows = await fetchAllRows((from, to) => getClient().from('entry_logs').select('id, entry_id').order('id', { ascending: true }).range(from, to));
         }
         const counts = {};
-        // Episode rows are progress, not "times watched" — only whole-title logs count.
-        for (const r of rows || []) if (!r.episode_id) counts[r.entry_id] = (counts[r.entry_id] || 0) + 1;
+        // Episode rows are progress, not "times watched" — only whole-title logs
+        // count, and not one still open (started, not finished yet).
+        for (const r of rows || []) {
+            if (r.episode_id || (!r.watched_on && r.started_on)) continue;
+            counts[r.entry_id] = (counts[r.entry_id] || 0) + 1;
+        }
         return counts;
     } catch { return {}; }
 }

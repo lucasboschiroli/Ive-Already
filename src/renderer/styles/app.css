@@ -1040,10 +1040,13 @@ select { display: none; } /* native selects fully replaced by .custom-select com
 .diary-rating-cell { width: 100px; color: #e0b400; font-size: 1.15rem; white-space: nowrap; }
 .diary-heart { color: var(--accent); font-size: 1.3rem; }
 .diary-rewatch-cell, .diary-review-cell { width: 34px; text-align: center; color: var(--gray); font-size: 1.3rem; }
-/* Edit/Delete only on the row you're pointing at, so the table stays calm */
+/* Edit/Delete always there, but quiet until you point at the row */
 .diary-actions-cell { width: 140px; text-align: right; }
-.diary-actions-cell .diary-row-actions { justify-content: flex-end; visibility: hidden; }
-.diary-table-row:hover .diary-actions-cell .diary-row-actions, .diary-actions-cell .diary-row-btn:focus-visible { visibility: visible; }
+.diary-actions-cell .diary-row-actions { justify-content: flex-end; }
+.diary-actions-cell .diary-row-btn { color: var(--gray); border-color: #e2e2e2; }
+.diary-table-row:hover .diary-actions-cell .diary-row-btn { color: #1a1a1a; border-color: #ccc; }
+.diary-table-row:hover .diary-actions-cell .diary-row-btn:hover { border-color: var(--accent); color: var(--accent); }
+.dm-hint { font-size: 1.1rem; color: var(--gray); }
 .diary-ep-label { font-size: 1.05rem; font-weight: 600; color: var(--accent); border: 1.5px solid currentColor; border-radius: 10px; padding: 0.05rem 0.6rem; margin-left: 0.4rem; white-space: nowrap; }
 .diary-started-note { font-size: 1.1rem; font-weight: 500; color: var(--gray); margin-left: 0.4rem; white-space: nowrap; }
 /* "Started" / "Dropped" moments sit a step back from actual viewings */

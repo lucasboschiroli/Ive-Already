@@ -1592,8 +1592,16 @@ function renderProfileTab(tab) {
                 row(byId[l.entry_id], l.watched_on, { diary_kind: 'log', diary_log: l, diary_started: startOf(byId[l.entry_id], l), status: l.is_rewatch ? 'rewatched' : 'completed' }));
             const legacyRowsAll = dated.filter((e) => !logged.has(e.id)).flatMap((e) => legacyLogRows(e).map((l) =>
                 row(e, l.watched_on, { diary_kind: 'legacy', diary_log: l, diary_started: startOf(e, l), status: l.is_rewatch ? 'rewatched' : 'completed' })));
-            // A "Started" moment that a finished row already shows as its start isn't repeated.
-            const shownStarts = new Set([...logRows, ...legacyRowsAll].filter((r) => r.diary_started).map((r) => `${r.entry.id}:${r.diary_started}`));
+            // A show/book/game you're in the middle of: its open entry, on the day it started.
+            const ongoingVerb = (e) => (e.status !== 'in_progress' ? 'Started' : e.media_type === 'book' ? 'Reading' : e.media_type === 'game' ? 'Playing' : 'Watching');
+            const openRows = titleLogs.filter((l) => isOpenLog(l) && byId[l.entry_id]).map((l) =>
+                row(byId[l.entry_id], l.started_on, { diary_kind: 'open', diary_log: l, ep_label: ongoingVerb(byId[l.entry_id]),
+                    status: l.is_rewatch ? 'rewatched' : byId[l.entry_id].status, rating: null, is_favorite: false, review: '' }));
+            // A "Started" moment that a row already shows as its start isn't repeated.
+            const shownStarts = new Set([
+                ...[...logRows, ...legacyRowsAll].filter((r) => r.diary_started).map((r) => `${r.entry.id}:${r.diary_started}`),
+                ...openRows.map((r) => `${r.entry.id}:${r.date_finished}`),
+            ]);
             const epRows = (epLogs || []).filter((l) => l.watched_on && byId[l.entry_id]).map((l) =>
                 row(byId[l.entry_id], l.watched_on, { status: 'completed', diary_kind: 'episode',
                     ep_label: l.episode_label || 'Episode', is_episode: true, rating: null, is_favorite: false, review: '' }));
@@ -1601,7 +1609,7 @@ function renderProfileTab(tab) {
                 && !(ev.status === 'in_progress' && shownStarts.has(`${ev.entry_id}:${eventLocalISO(ev.happened_at)}`))).map((ev) =>
                 row(byId[ev.entry_id], eventLocalISO(ev.happened_at), { status: ev.status, diary_kind: 'event', diary_event: ev,
                     ep_label: ev.status === 'dropped' ? 'Dropped' : 'Started', rating: null, is_favorite: false, review: '' }));
-            const all = [...logRows, ...legacyRowsAll, ...epRows, ...eventRows];
+            const all = [...logRows, ...legacyRowsAll, ...openRows, ...epRows, ...eventRows];
             if (!all.length) { wrapEl.innerHTML = `<p class="profile-tab-empty">No dated entries yet.</p>`; return; }
             setupProfileDiary(all);
         };
@@ -1765,23 +1773,35 @@ function legacyLogRows(e) {
     return out;
 }
 
+// A watch-through you're still in the middle of (shows, books, games): started,
+// not finished yet. Opened and closed by the database as the status changes
+// (open-diary-entries-migration.sql); it isn't a viewing until it's closed.
+const isOpenLog = (l) => Boolean(l && !l.watched_on && l.started_on);
+
 // The entry fields (dates + status) a title's diary rows imply, so every other
 // page keeps working off the entry: first viewing = finished date, latest
 // rewatch = rewatched date, 2+ viewings = Rewatched, one left = Watched.
-// Dropped is never overridden.
+// Dropped is never overridden, and neither is a title you're in the middle of.
 function entryFieldsFromLogs(list, currentStatus, continuous) {
-    const sortedAsc = [...list].filter((l) => l.watched_on).sort((a, b) => a.watched_on.localeCompare(b.watched_on));
+    const viewings = list.filter((l) => !isOpenLog(l));
+    const ongoing = viewings.length !== list.length;
+    const sortedAsc = viewings.filter((l) => l.watched_on).sort((a, b) => a.watched_on.localeCompare(b.watched_on));
     const firsts = sortedAsc.filter((l) => !l.is_rewatch);
     const rewatches = sortedAsc.filter((l) => l.is_rewatch);
     const fields = {
         date_finished: (firsts[0] || sortedAsc[0])?.watched_on || null,
         date_rewatched: rewatches.length ? rewatches[rewatches.length - 1].watched_on : null,
     };
+    // A dropped title with nothing finished keeps its drop date (the status menu stores it as date_finished).
+    if (currentStatus === 'dropped' && !sortedAsc.length) delete fields.date_finished;
     const started = list.map((l) => l.started_on).filter(Boolean).sort()[0];
     if (continuous && started) fields.date_started = started;
-    if (list.length >= 2 || rewatches.length) { if (currentStatus !== 'dropped') fields.status = 'rewatched'; }
-    // One viewing left (e.g. after deleting a rewatch) is plain Watched again.
-    else if (list.length === 1 && currentStatus !== 'dropped' && currentStatus !== 'completed') fields.status = 'completed';
+    const keep = currentStatus === 'dropped' || (ongoing && currentStatus === 'in_progress');
+    if (!keep) {
+        if (viewings.length >= 2 || rewatches.length) fields.status = 'rewatched';
+        // One viewing left (e.g. after deleting a rewatch) is plain Watched again.
+        else if (viewings.length === 1 && currentStatus !== 'completed') fields.status = 'completed';
+    }
     return fields;
 }
 
@@ -1913,7 +1933,10 @@ async function changeDiaryLog(entry, target, changes) {
         await window.api.deleteEntryLog(log.id);
         logs = logs.filter((l) => l.id !== log.id);
     }
-    await upsertEntryAndInvalidate(entry.media_id, entryFieldsFromLogs(logs, entry.status, entry.media_type !== 'movie'));
+    const fields = entryFieldsFromLogs(logs, entry.status, entry.media_type !== 'movie');
+    // Removing what you're in the middle of doesn't mean you finished it.
+    if (!changes && isOpenLog(log)) delete fields.status;
+    await upsertEntryAndInvalidate(entry.media_id, fields);
 }
 
 // Is this Diary row the title's earliest "Started" moment?
@@ -1966,7 +1989,7 @@ function openDiaryRowEditor(item) {
             <div class="diary-edit-body">
                 <div class="dm-title">${escapeHtml(item.title)}${isEvent ? ` <span class="diary-ep-label">${escapeHtml(item.ep_label)}</span>` : ''}</div>
                 ${!isEvent && continuous ? '<span class="dm-sub">Started on</span><div class="dre-started"></div>' : ''}
-                <span class="dm-sub">${isEvent ? `${escapeHtml(item.ep_label)} on` : `${escapeHtml(window.statusLabel('completed', item.media_type))} on`}</span><div class="dre-watched"></div>
+                <span class="dm-sub">${isEvent ? `${escapeHtml(item.ep_label)} on` : continuous ? `Finished on <span class="dm-hint">— leave empty while you're still ${item.media_type === 'book' ? 'reading' : item.media_type === 'game' ? 'playing' : 'watching'}</span>` : `${escapeHtml(window.statusLabel('completed', item.media_type))} on`}</span><div class="dre-watched"></div>
                 ${isEvent ? '' : `<label class="diary-check"><input type="checkbox" class="dre-rewatch" ${log.is_rewatch ? 'checked' : ''}><span class="diary-box-mark"></span><span>${escapeHtml(window.statusLabel('rewatched', item.media_type))}</span></label>`}
             </div>
             <div class="dm-foot"><button type="button" class="save-btn" id="dreSave">Save</button></div>
@@ -1975,7 +1998,8 @@ function openDiaryRowEditor(item) {
     const close = () => overlay.remove();
     overlay.addEventListener('mousedown', (ev) => { if (ev.target === overlay) close(); });
     overlay.querySelector('.dm-close').addEventListener('click', close);
-    const watched = createDateInput({ container: overlay.querySelector('.dre-watched'), initialISO: item.date_finished, onChange: () => {} });
+    // An open entry's row date is its start — its finish starts empty.
+    const watched = createDateInput({ container: overlay.querySelector('.dre-watched'), initialISO: isEvent ? item.date_finished : (log.watched_on || null), onChange: () => {} });
     const started = !isEvent && continuous ? createDateInput({ container: overlay.querySelector('.dre-started'), initialISO: log.started_on || null, onChange: () => {} }) : null;
     overlay.querySelector('#dreSave').addEventListener('click', async (ev) => {
         const btn = ev.currentTarget;
@@ -1990,6 +2014,7 @@ function openDiaryRowEditor(item) {
             } else {
                 const changes = { watched_on: watched.getISO() || null, is_rewatch: overlay.querySelector('.dre-rewatch').checked };
                 if (started) changes.started_on = started.getISO() || null;
+                if (continuous && !changes.watched_on && !changes.started_on) throw new Error('Add a start or a finish date');
                 await changeDiaryLog(item.entry, log, changes);
             }
             close();
@@ -5691,8 +5716,10 @@ function setupDetailPanel({ details, entryRef, dateStartedInput, dateFinishedInp
         return entryRef.current;
     }
     // Keep the entry's own fields (status + dates) in step with the log, so every other page keeps working.
-    async function syncEntry(list, extra = {}) {
+    // keepStatus: the change doesn't say anything about finishing (removing an open entry).
+    async function syncEntry(list, extra = {}, { keepStatus = false } = {}) {
         const fields = { ...extra, ...entryFieldsFromLogs(list, entryRef.current?.status, continuous) };
+        if (keepStatus) delete fields.status;
         entryRef.current = await upsertEntryAndInvalidate(details.mediaId, fields);
         dateFinishedInput.setISO(fields.date_finished);
         dateRewatchedInput.setISO(fields.date_rewatched);
@@ -5732,6 +5759,13 @@ function setupDetailPanel({ details, entryRef, dateStartedInput, dateFinishedInp
         await refreshLogs();
         if (!tableOk) throw new Error('no table');
         await materializeLegacy();
+        // Finishing a show/book/game you're in the middle of closes its open
+        // entry (one entry per watch-through) instead of adding a second one.
+        const open = logs.find(isOpenLog);
+        if (open) {
+            await replaceLog(open, { watched_on: watchedOn || todayISOLocal(), started_on: startedOn || open.started_on });
+            return;
+        }
         // Same date as a viewing already in the diary (typically the date the
         // status menu filled in): that's the same viewing, not a rewatch.
         // `force` is for an explicit "Rewatched" pick, which always means a new viewing.
@@ -5848,7 +5882,8 @@ function setupDetailPanel({ details, entryRef, dateStartedInput, dateFinishedInp
 
         const list = rows();
         const st = e?.status;
-        const logged = list.length > 0 || st === 'completed' || st === 'rewatched';
+        // An open entry (still watching) isn't a finished viewing — "Log in the Diary" finishes it.
+        const logged = list.some((l) => !isOpenLog(l)) || st === 'completed' || st === 'rewatched';
         logBtn.textContent = logged ? 'Log again / add review…' : 'Log in the Diary';
         // Every title in your library has a story (added, started, episodes, achievements…), not just finished ones.
         activityBtn.classList.toggle('hidden', !e);
@@ -5860,7 +5895,7 @@ function setupDetailPanel({ details, entryRef, dateStartedInput, dateFinishedInp
     logBtn.onclick = (ev) => {
         ev.stopPropagation();
         const e = entryRef.current;
-        const logged = rows().length > 0 || e?.status === 'completed' || e?.status === 'rewatched';
+        const logged = rows().some((l) => !isOpenLog(l)) || e?.status === 'completed' || e?.status === 'rewatched';
         if (!logged) { openLogModal('log'); return; }
         flyout.classList.toggle('hidden');
     };
@@ -5891,7 +5926,9 @@ function setupDetailPanel({ details, entryRef, dateStartedInput, dateFinishedInp
         const e0 = entryRef.current;
         let rating = e0?.rating || 0;
         let liked = Boolean(e0?.is_favorite);
-        const hadLogs = rows().length > 0;
+        const hadLogs = rows().some((l) => !isOpenLog(l));
+        // Finishing what you're in the middle of: its start is already known.
+        const openEntry = rows().find(isOpenLog);
         const poster = details.poster_url || '';
         const heading = mode === 'review' ? (e0?.review ? 'Edit review…' : 'Add a review…') : `I ${pastLower}…`;
         const overlay = document.createElement('div');
@@ -5927,7 +5964,7 @@ function setupDetailPanel({ details, entryRef, dateStartedInput, dateFinishedInp
         $('dmReview').value = e0?.review || '';
 
         const watchedInput = createDateInput({ container: $('dmWatchedHost'), initialISO: todayISOLocal(), onChange: () => {} });
-        const startedInput = continuous ? createDateInput({ container: $('dmStartedHost'), initialISO: null, onChange: () => {} }) : null;
+        const startedInput = continuous ? createDateInput({ container: $('dmStartedHost'), initialISO: openEntry?.started_on || null, onChange: () => {} }) : null;
         // the date only applies while "Watched on" is ticked; "I've watched this before" alone means an earlier, undated viewing
         const syncDates = () => {
             const on = $('dmWatched').checked;
@@ -6071,9 +6108,14 @@ function setupDetailPanel({ details, entryRef, dateStartedInput, dateFinishedInp
                     }
                     return [...groups.entries()];
                 };
+                // A watch-through's start is shown once: by its diary entry, not again by the "started" moment.
+                const loggedStarts = new Set(list.map((l) => (continuous ? l.started_on : null)).filter(Boolean));
                 const timeline = [
-                    ...list.map((l) => ({ kind: 'log', log: l, day: l.watched_on || String(l.created_at || '').slice(0, 10), at: l.watched_on || l.created_at })),
-                    ...events.filter((ev) => ['planned', 'in_progress', 'dropped'].includes(ev.status))
+                    ...list.map((l) => (isOpenLog(l)
+                        ? { kind: 'open', log: l, day: l.started_on, at: l.started_on }
+                        : { kind: 'log', log: l, day: l.watched_on || String(l.created_at || '').slice(0, 10), at: l.watched_on || l.created_at })),
+                    ...events.filter((ev) => ['planned', 'in_progress', 'dropped'].includes(ev.status)
+                        && !(ev.status === 'in_progress' && loggedStarts.has(eventLocalISO(ev.happened_at))))
                         .map((ev) => ({ kind: 'event', ev, day: eventLocalISO(ev.happened_at), at: ev.happened_at })),
                     ...byDay(episodeLogs, (l) => l.watched_on).map(([day, eps]) => ({ kind: 'episodes', eps, day, at: eps.map((x) => x.created_at || day).sort().pop() })),
                     ...byDay(unlocks, (u) => u.unlocked_at && eventLocalISO(u.unlocked_at)).map(([day, achs]) => ({ kind: 'achievements', achs, day, at: achs.map((x) => x.unlocked_at).sort().pop() })),
@@ -6098,17 +6140,22 @@ function setupDetailPanel({ details, entryRef, dateStartedInput, dateFinishedInp
                         return `<div class="act-row"><div class="act-row-text"><b class="act-who">You</b> ${what} <span class="act-dim">on ${activityDate(t.day)}</span></div><span class="act-ago">${activityAgo(t.at)}</span></div>`;
                     }
                     const l = t.log;
+                    if (t.kind === 'open') {
+                        return `<div class="act-row"><div class="act-row-text"><b class="act-who">You</b> started ${verbs[0]} <b>${escapeHtml(details.title)}</b>${l.is_rewatch ? ' again' : ''} <span class="act-dim">on ${activityDate(l.started_on)}</span></div><span class="act-ago">${activityAgo(t.at)}</span></div>`;
+                    }
                     const lead = firstLog;
                     firstLog = false;
                     const verb = l.is_rewatch ? `re${pastLower}` : pastLower;
-                    return `<div class="act-row"><div class="act-row-text"><b class="act-who">You</b> ${verb}${lead && e?.rating ? ' and rated' : ''} <b>${escapeHtml(details.title)}</b>${lead ? stars + heart : ''}${l.watched_on ? ` <span class="act-dim">on ${activityDate(l.watched_on)}</span>` : ''}</div><span class="act-ago">${activityAgo(t.at)}</span></div>`;
+                    const since = continuous && l.started_on && l.watched_on ? ` · started ${activityDate(l.started_on)}` : '';
+                    return `<div class="act-row"><div class="act-row-text"><b class="act-who">You</b> ${verb}${lead && e?.rating ? ' and rated' : ''} <b>${escapeHtml(details.title)}</b>${lead ? stars + heart : ''}${l.watched_on ? ` <span class="act-dim">on ${activityDate(l.watched_on)}${since}</span>` : ''}</div><span class="act-ago">${activityAgo(t.at)}</span></div>`;
                 }).join('');
                 if (!timeline.length && (e?.rating || e?.is_favorite)) html = `<div class="act-row"><div class="act-row-text"><b class="act-who">You</b> ${e.rating ? 'rated' : 'liked'} <b>${escapeHtml(details.title)}</b>${stars}${heart}</div></div>`;
                 body.innerHTML = html ? `${html}<div class="act-end">End of recent activity</div>` : '<div class="act-end">Nothing recorded for this title yet</div>';
             } else if (tab === 'diary') {
                 diaryList = list;
                 const actions = tableOk ? `<span class="diary-row-actions"><button type="button" class="diary-row-btn" data-act="edit">Edit</button><button type="button" class="diary-row-btn" data-act="delete">Delete</button></span>` : '';
-                body.innerHTML = list.length ? list.map((l, i) => `<div class="diary-row" data-i="${i}"><span class="diary-row-date">${continuous && l.started_on ? `${fmt(l.started_on)} → ` : ''}${fmt(l.watched_on)}</span>${l.is_rewatch ? '<span class="diary-row-tag">Rewatch</span>' : ''}${actions}</div>`).join('') : '<div class="act-end">Nothing in your diary yet</div>';
+                const nowTag = details.media_type === 'book' ? 'Reading' : details.media_type === 'game' ? 'Playing' : 'Watching';
+                body.innerHTML = list.length ? list.map((l, i) => `<div class="diary-row" data-i="${i}"><span class="diary-row-date">${continuous && l.started_on ? `${fmt(l.started_on)} → ` : ''}${isOpenLog(l) ? 'now' : fmt(l.watched_on)}</span>${isOpenLog(l) ? `<span class="diary-row-tag">${nowTag}</span>` : ''}${l.is_rewatch ? '<span class="diary-row-tag">Rewatch</span>' : ''}${actions}</div>`).join('') : '<div class="act-end">Nothing in your diary yet</div>';
             } else {
                 body.innerHTML = e?.review ? `<div class="act-review-full">${stars}${heart}${e.review_spoilers ? `<div class="spoiler-wrap"><div class="spoiler-warn">Contains spoilers &middot; click to reveal</div><p class="spoiler-body hidden">${escapeHtml(e.review)}</p></div>` : `<p>${escapeHtml(e.review)}</p>`}</div>` : '<div class="act-end">No review yet</div>';
             }
@@ -6123,8 +6170,8 @@ function setupDetailPanel({ details, entryRef, dateStartedInput, dateFinishedInp
             await materializeLegacy();
             return logs.find((l) => l.watched_on === row.watched_on && !!l.is_rewatch === !!row.is_rewatch);
         }
-        async function afterDiaryChange(message) {
-            await syncEntry(logs);
+        async function afterDiaryChange(message, opts) {
+            await syncEntry(logs, {}, opts);
             paint();
             paintStatusButtons();
             render(currentTab);
@@ -6137,11 +6184,12 @@ function setupDetailPanel({ details, entryRef, dateStartedInput, dateFinishedInp
             const row = diaryList[Number(rowEl.dataset.i)];
             if (!row) return;
             if (btn.dataset.act === 'delete') {
-                if (!(await showConfirm(`Delete the ${fmt(row.watched_on)} entry from your diary?`, { confirmLabel: 'Delete' }))) return;
+                const what = isOpenLog(row) ? `the entry started ${fmt(row.started_on)}` : `the ${fmt(row.watched_on)} entry`;
+                if (!(await showConfirm(`Delete ${what} from your diary?`, { confirmLabel: 'Delete' }))) return;
                 try {
                     const log = await realLog(row);
                     if (log) await deleteLog(log);
-                    await afterDiaryChange('Removed from your diary');
+                    await afterDiaryChange('Removed from your diary', { keepStatus: isOpenLog(row) });
                 } catch (err) { showToast(`Couldn't delete: ${err.message}`, true); }
                 return;
             }
@@ -6194,7 +6242,9 @@ function setupDetailPanel({ details, entryRef, dateStartedInput, dateFinishedInp
     async function openLogForStatus(status, onSaved) {
         if (status !== 'completed' && status !== 'rewatched') return false;
         await refreshLogs();
-        if (status === 'completed' && rows().length) return false;
+        // Already watched (and not in the middle of another go): just a status change.
+        // In the middle of one: the window finishes it, with its start filled in.
+        if (status === 'completed' && rows().length && !rows().some(isOpenLog)) return false;
         openLogModal(status === 'rewatched' ? 'again' : 'log', { forceStatus: status, onSaved });
         return true;
     }
