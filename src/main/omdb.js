@@ -17,15 +17,24 @@ function getKey() {
     return process.env.OMDB_API_KEY || null;
 }
 
+// Returns the ratings, or null when OMDb has no data for the title. Throws when
+// OMDb can't be asked (no key, rejected key, daily limit, offline) — the caller
+// then keeps the scores it already has instead of saving "no rating" over them.
 async function getRatings(imdbId) {
     const key = getKey();
-    if (!key || !imdbId) return null;
+    if (!key) throw new Error('OMDB_API_KEY is not set');
+    if (!imdbId) return null;
 
     const url = `${OMDB_BASE}?apikey=${encodeURIComponent(key)}&i=${encodeURIComponent(imdbId)}`;
-    const res = await fetch(url);
-    if (!res.ok) throw new Error(`OMDb request failed: ${res.status}`);
-    const data = await res.json();
-    if (data.Response === 'False') return null;
+    const res = await fetch(url, { signal: AbortSignal.timeout(8000) });
+    const data = await res.json().catch(() => ({}));
+    if (!res.ok) throw new Error(`OMDb request failed: ${res.status}${data.Error ? ` (${data.Error})` : ''}`);
+    if (data.Response === 'False') {
+        // "Movie not found!" / "Incorrect IMDb ID." mean no data for this title;
+        // anything else (bad key, request limit) is OMDb being unavailable.
+        if (/not found|incorrect imdb id/i.test(data.Error || '')) return null;
+        throw new Error(`OMDb: ${data.Error || 'no response'}`);
+    }
 
     const rtEntry = (data.Ratings || []).find((r) => r.Source === 'Rotten Tomatoes');
     const tomatometer = rtEntry ? parseInt(rtEntry.Value, 10) : null;

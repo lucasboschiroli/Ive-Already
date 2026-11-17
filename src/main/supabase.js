@@ -792,7 +792,8 @@ async function setEpisodesWatched(session, entryId, addIds, removeIds) {
     }
 }
 
-// Ticking an episode adds a diary row dated today (local time); unticking removes it.
+// Ticking an episode while you're watching adds a diary row dated today (local
+// time); unticking removes it. Ticks on a finished or dropped show add none.
 // Skipped silently if episode-diary-migration.sql hasn't been run yet.
 function localToday() {
     const d = new Date();
@@ -805,6 +806,11 @@ async function syncEpisodeLog(entryId, episodeId, watched) {
             await c.from('entry_logs').delete().eq('entry_id', entryId).eq('episode_id', episodeId);
             return;
         }
+        // Ticking episodes of a show you've already finished (or dropped) is
+        // filling in the record, not watching them today — a dated diary row
+        // would make it look like you binged everything on one day.
+        const { data: entry } = await c.from('entries').select('status').eq('id', entryId).maybeSingle();
+        if (entry && ['completed', 'rewatched', 'dropped'].includes(entry.status)) return;
         const { data: existing, error: e1 } = await c.from('entry_logs').select('id').eq('entry_id', entryId).eq('episode_id', episodeId).limit(1);
         if (e1 || (existing && existing.length)) return;
         const { data: ep } = await c.from('episodes').select('season_number, episode_number, name').eq('id', episodeId).maybeSingle();

@@ -648,13 +648,21 @@ function registerHandlers() {
         let ratings = null;
         try {
             const cached = await sb.getMediaRatingsCache(mediaId);
+            const stored = cached ? { imdb_rating: cached.imdb_rating, imdb_votes: cached.imdb_votes, rt_tomatometer: cached.rt_tomatometer, awards: cached.awards_text } : null;
             const oneWeekMs = 7 * 24 * 60 * 60 * 1000;
             const isFresh = cached?.ratings_checked_at && (Date.now() - new Date(cached.ratings_checked_at).getTime()) < oneWeekMs;
             if (isFresh) {
-                ratings = { imdb_rating: cached.imdb_rating, imdb_votes: cached.imdb_votes, rt_tomatometer: cached.rt_tomatometer, awards: cached.awards_text };
+                ratings = stored;
             } else if (details.imdb_id) {
-                ratings = (await omdb.getRatings(details.imdb_id)) || { imdb_rating: null, imdb_votes: null, rt_tomatometer: null, awards: null };
-                await sb.updateMediaRatings(mediaId, { imdb_id: details.imdb_id, ...ratings });
+                try {
+                    ratings = (await omdb.getRatings(details.imdb_id)) || { imdb_rating: null, imdb_votes: null, rt_tomatometer: null, awards: null };
+                    await sb.updateMediaRatings(mediaId, { imdb_id: details.imdb_id, ...ratings });
+                } catch (err) {
+                    // OMDb can't be asked right now (bad key, daily limit, offline):
+                    // show the scores we already have and try again next time.
+                    console.error('OMDb unavailable, showing stored ratings:', err.message);
+                    ratings = stored;
+                }
             }
         } catch (err) {
             console.error('Failed to fetch/cache OMDb ratings:', err);
