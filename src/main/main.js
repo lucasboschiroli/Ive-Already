@@ -28,6 +28,10 @@ function deliverListToken(token) {
     if (mainWindow) mainWindow.webContents.send('deeplink:list');
 }
 
+// Same ID the installer gives the Start Menu / desktop shortcuts (build.appId),
+// so Windows ties the running window to them: right taskbar icon and pinning.
+if (process.platform === 'win32') app.setAppUserModelId('com.ivealready.app');
+
 const isPrimaryInstance = app.requestSingleInstanceLock();
 if (!isPrimaryInstance) {
     app.quit(); // the open window gets the link via 'second-instance'
