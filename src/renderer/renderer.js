@@ -691,6 +691,7 @@ let profileFilmsFilter = { search: '', decade: null, genre: null, sort: 'last_wa
 let profileSeriesFilter = { search: '', decade: null, genre: null, sort: 'last_watched', ascending: false, expanded: false };
 let profileBooksFilter = { search: '', decade: null, genre: null, sort: 'last_watched', ascending: false, expanded: false };
 let profileGamesFilter = { search: '', decade: null, genre: null, sort: 'last_watched', ascending: false, expanded: false };
+let profileDroppedFilter = { search: '', decade: null, genre: null, sort: 'last_watched', ascending: false, expanded: false };
 let profileShortsFilter = { search: '', decade: null, genre: null, sort: 'last_watched', ascending: false, expanded: false };
 
 // Shared by the Films and Series sections on the profile's "films" tab —
@@ -740,7 +741,7 @@ function profileMediaSectionMarkup(prefix) {
 
 // Wires up the filter row for one profileMediaSectionMarkup instance —
 // search, decade, genre, sort, and sort direction all live-filter `items`.
-function setupProfileMediaSection({ prefix, label, items, filterState, sortOptions, emptyText }) {
+function setupProfileMediaSection({ prefix, label, items, filterState, sortOptions, emptyText, cardAction = null }) {
     applyViewPrefs(prefix, filterState);
     const allGenres = [...new Set(items.flatMap((e) => { try { return JSON.parse(e.genres || '[]'); } catch { return []; } }))].sort();
     const countEl = document.getElementById(`${prefix}Count`);
@@ -794,7 +795,7 @@ function setupProfileMediaSection({ prefix, label, items, filterState, sortOptio
         viewAllBtn.style.display = over ? '' : 'none';
         viewAllBtn.textContent = filterState.expanded ? 'Show Less' : 'View All';
         const display = (over && !filterState.expanded) ? sorted.slice(0, twoRowCap) : sorted;
-        renderPosterGrid(gridEl, display, badgeCriterion);
+        renderPosterGrid(gridEl, display, badgeCriterion, { cardAction });
     };
 
     const searchInput = document.getElementById(`${prefix}Search`);
@@ -1394,6 +1395,11 @@ async function renderProfileActivityTab(container) {
 function profileFinished(e) {
     return e.status === 'completed' || e.status === 'rewatched' || e.status === 'dropped';
 }
+// What the profile's Watched / Read / Played tabs (and their counts) show:
+// actually finished. Dropped titles get their own Dropped tab instead.
+function profileDone(e) {
+    return e.status === 'completed' || e.status === 'rewatched';
+}
 
 // The banner's stat row shows different numbers depending on which tab is
 // active: totals on Overview, Films/Series counts on the films tab, and
@@ -1406,9 +1412,9 @@ function renderProfileStatsRow(mode, counts = {}) {
 }
 function renderProfileStatsRowBase(mode, counts = {}) {
     if (mode === 'overview') {
-        const watchedCount = profileAllEntries.filter((e) => profileFinished(e) && (e.media_type === 'movie' || e.media_type === 'tv')).length;
-        const readCount = profileAllEntries.filter((e) => profileFinished(e) && e.media_type === 'book').length;
-        const playedCount = profileAllEntries.filter((e) => profileFinished(e) && e.media_type === 'game').length;
+        const watchedCount = profileAllEntries.filter((e) => profileDone(e) && (e.media_type === 'movie' || e.media_type === 'tv')).length;
+        const readCount = profileAllEntries.filter((e) => profileDone(e) && e.media_type === 'book').length;
+        const playedCount = profileAllEntries.filter((e) => profileDone(e) && e.media_type === 'game').length;
         profileEls.statsRow.innerHTML = `
             <div data-goto="films"><div class="profile-stat-num">${watchedCount}</div><div class="profile-stat-label">Watched</div></div>
             <div data-goto="books"><div class="profile-stat-num">${readCount}</div><div class="profile-stat-label">Read</div></div>
@@ -1484,10 +1490,10 @@ function renderProfileTab(tab) {
     if (tab === 'films') {
         // Shorts get their own section rather than padding out the features
         // list — same 40-minute cut-off the dashboard's short films row uses.
-        const allMovies = entries.filter((e) => profileFinished(e) && e.media_type === 'movie');
+        const allMovies = entries.filter((e) => profileDone(e) && e.media_type === 'movie');
         const movies = allMovies.filter((e) => !isShortFilm(e));
         const shorts = allMovies.filter(isShortFilm);
-        const series = entries.filter((e) => profileFinished(e) && e.media_type === 'tv');
+        const series = entries.filter((e) => profileDone(e) && e.media_type === 'tv');
         renderProfileStatsRow('films', { movies: movies.length, series: series.length, shorts: shorts.length });
         const movieSortOptions = [
             { value: 'last_watched', label: 'Last Watched' },
@@ -1529,7 +1535,7 @@ function renderProfileTab(tab) {
 
     if (tab === 'books' || tab === 'games') {
         const isBook = tab === 'books';
-        const items = entries.filter((e) => profileFinished(e) && e.media_type === (isBook ? 'book' : 'game'));
+        const items = entries.filter((e) => profileDone(e) && e.media_type === (isBook ? 'book' : 'game'));
         profileEls.statsRow.innerHTML = `<div><div class="profile-stat-num">${items.length}</div><div class="profile-stat-label">${isBook ? 'Books' : 'Games'}</div></div>`;
         profileEls.statsRow.innerHTML += [['Lists', profileSocial.lists, 'lists'], ['Following', profileSocial.following, 'following'], ['Followers', profileSocial.followers, 'followers']]
             .map(([l, n, g]) => `<div data-goto="${g}"><div class="profile-stat-num">${n}</div><div class="profile-stat-label">${l}</div></div>`).join('');
@@ -1539,6 +1545,27 @@ function renderProfileTab(tab) {
             emptyText: isBook ? 'No books read yet.' : 'No games played yet.',
             sortOptions: [
                 { value: 'last_watched', label: isBook ? 'Last Read' : 'Last Played' },
+                { value: 'alphabetical', label: 'Alphabetical' },
+                { value: 'release_date', label: 'Release Date' },
+                { value: 'rating', label: 'My Rating' },
+            ],
+        };
+        container.innerHTML = `<div class="profile-tab-section">${profileMediaSectionMarkup(sec.prefix)}</div>`;
+        setupProfileMediaSection(sec);
+        return;
+    }
+
+    // Everything you stopped part-way, any type — each with "Pick up again".
+    if (tab === 'dropped') {
+        const items = entries.filter((e) => e.status === 'dropped');
+        profileEls.statsRow.innerHTML = `<div><div class="profile-stat-num">${items.length}</div><div class="profile-stat-label">Dropped</div></div>`;
+        profileEls.statsRow.innerHTML += [['Lists', profileSocial.lists, 'lists'], ['Following', profileSocial.following, 'following'], ['Followers', profileSocial.followers, 'followers']]
+            .map(([l, n, g]) => `<div data-goto="${g}"><div class="profile-stat-num">${n}</div><div class="profile-stat-label">${l}</div></div>`).join('');
+        const sec = {
+            prefix: 'profileDropped', label: 'Dropped', items, filterState: profileDroppedFilter, cardAction: 'pickup',
+            emptyText: "Nothing dropped — everything you've started is still going or finished.",
+            sortOptions: [
+                { value: 'last_watched', label: 'Recently Dropped' },
                 { value: 'alphabetical', label: 'Alphabetical' },
                 { value: 'release_date', label: 'Release Date' },
                 { value: 'rating', label: 'My Rating' },
@@ -2502,6 +2529,7 @@ async function checkForNewEpisodesInBackground() {
     // or those refreshed numbers wouldn't show up until a full restart.
     invalidateEntriesCache();
     if (!updated || updated.length === 0) return;
+    markNewTitles(updated.filter((u) => u.tmdbId).map((u) => `tv:${u.tmdbId}`)); // "NEW!" on their posters
 
     // One combined notification rather than spamming one per show.
     const body = updated.length === 1
@@ -2790,6 +2818,45 @@ const TYPE_LABELS_PLURAL = { movie: 'Films', tv: 'Series', book: 'Books', game: 
 function statusFlag(status) {
     return status ? `<span class="status-flag flag-${status}"></span>` : '';
 }
+
+// ---- "NEW!" corner tag ----
+// Shows: flagged when the background check finds new episodes (and moves the
+// show back to Watching); the flag lives on this device until you open the
+// show, or 30 days. Watchlist movies: automatically, for 2 weeks after release.
+const NEW_TITLES_KEY = 'ia_new_titles';
+const NEW_TITLE_DAYS = 30;
+function readNewTitles() {
+    try {
+        const all = JSON.parse(localStorage.getItem(NEW_TITLES_KEY) || '{}');
+        const cutoff = Date.now() - NEW_TITLE_DAYS * 864e5;
+        return Object.fromEntries(Object.entries(all).filter(([, at]) => at > cutoff));
+    } catch { return {}; }
+}
+function writeNewTitles(map) {
+    try { localStorage.setItem(NEW_TITLES_KEY, JSON.stringify(map)); } catch { /* storage unavailable: no badge */ }
+}
+function markNewTitles(keys) {
+    const map = readNewTitles();
+    for (const k of keys) map[k] = Date.now();
+    writeNewTitles(map);
+}
+function clearNewTitle(mediaType, tmdbId) {
+    const map = readNewTitles();
+    const key = `${mediaType}:${tmdbId}`;
+    if (key in map) { delete map[key]; writeNewTitles(map); }
+}
+function isNewTitle(item) {
+    if (!item) return false;
+    if (readNewTitles()[`${item.media_type}:${item.tmdb_id}`]) return true;
+    if (item.media_type === 'movie' && item.status === 'planned' && item.release_date) {
+        const released = item.release_date.slice(0, 10);
+        const today = todayISOLocal();
+        const twoWeeksAgo = new Date(Date.now() - 14 * 864e5).toISOString().slice(0, 10);
+        return released <= today && released >= twoWeeksAgo;
+    }
+    return false;
+}
+const newBadge = (item) => (isNewTitle(item) ? '<span class="new-badge">NEW!</span>' : '');
 
 // Each nav entry maps to a slice of the catalog. `mediaTypes: null` means "everything".
 const SECTIONS = {
@@ -3576,6 +3643,9 @@ function renderListDetail() {
     const descEl = document.getElementById('listDetailDescription');
     descEl.textContent = list.description || '';
     descEl.classList.toggle('hidden', !list.description);
+    // No description: the side box floats right and the posters start beside it,
+    // instead of waiting below an empty row as tall as the box.
+    document.getElementById('listDetailSummaryRow').classList.toggle('no-description', !list.description);
     const genresEl = document.getElementById('listDetailGenres');
     const genreList = list.genres || [];
     genresEl.innerHTML = genreList.map((g) => `<span class="list-genre-tag list-genre-tag--static">${escapeHtml(g)}</span>`).join('');
@@ -4447,7 +4517,7 @@ async function loadDashboard() {
     const requestedSection = currentSection;
     const mySeq = ++dashLoadSeq;
     // Blank every row first so nothing from the previous section can linger on screen.
-    ['heroBanner', 'queueSection', 'nextWatchSection', 'seriesNextSection', 'continueWatchingSection', 'continueReadingSection', 'continuePlayingSection']
+    ['heroBanner', 'queueSection', 'nextWatchSection', 'seriesNextSection', 'newForYouSection', 'continueWatchingSection', 'continueReadingSection', 'continuePlayingSection']
         .forEach((id) => document.getElementById(id)?.classList.add('hidden'));
     const cfg = SECTIONS[currentSection];
     els.dashboardView.classList.add('hidden');
@@ -4506,6 +4576,8 @@ async function loadDashboard() {
     await safe('hero', () => renderHeroBanner(queueCache[0] || planned[0] || null));
     await safe('queue', () => renderQueueRow(queueCache));
     await safe('plans', () => renderSortControls());
+    // Not awaited: it asks TMDB about your franchises, and Home shouldn't wait on that.
+    if (onHome || currentSection === 'watched') safe('new for you', () => renderNewForYouRow(mySeq));
     await Promise.all([
         safe('continue tv', () => renderContinueWatchingRow(inProg('tv'), 'tv', mySeq)),
         safe('continue books', () => renderContinueWatchingRow(inProg('book'), 'book', mySeq)),
@@ -4777,6 +4849,32 @@ function renderSeriesNextRow(items) {
 // fresh fetch, since either the version or the key will have moved.
 let continueWatchingAuxCache = null;
 
+// "New for you": just-released movies in franchises you've watched (a sequel,
+// the next part) that aren't in your library yet. Same source as the
+// notification bell's "Sequel" alerts, released ones only.
+async function renderNewForYouRow(seq = dashLoadSeq) {
+    const sec = document.getElementById('newForYouSection');
+    const row = document.getElementById('newForYouRow');
+    if (!sec || !row) return;
+    const items = ((await window.api.getReleaseNotifications().catch(() => [])) || [])
+        .filter((n) => n.role === 'Sequel' && !n.upcoming && n.media_type === 'movie');
+    if (seq !== dashLoadSeq) return; // a newer page load took over while this was fetching
+    sec.classList.toggle('hidden', items.length === 0);
+    if (!items.length) { row.innerHTML = ''; return; }
+    document.getElementById('newForYouTitle').textContent = `New for you (${items.length})`;
+    row.innerHTML = items.map((n) => `
+        <div class="poster-card" data-tmdb-id="${n.tmdb_id}" data-media-type="movie">
+            <div class="poster-img-wrap">
+                <img src="${n.poster_url || ''}" alt="${escapeHtml(n.title)}" loading="lazy" data-img-fallback="dim">
+                <span class="new-badge">NEW!</span>
+            </div>
+            <div class="continue-watching-progress"><div class="continue-watching-label">${escapeHtml(n.sources?.[0] || 'Sequel')}</div></div>
+        </div>`).join('');
+    row.querySelectorAll('.poster-card').forEach((card) => {
+        card.addEventListener('click', () => openDetails(Number(card.dataset.tmdbId), 'movie'));
+    });
+}
+
 async function renderContinueWatchingRow(items, kind = 'tv', seq = dashLoadSeq) {
     const refs = kind === 'tv'
         ? { sec: els.continueWatchingSection, title: els.continueWatchingTitle, row: els.continueWatchingRow, word: 'Continue Watching' }
@@ -4844,6 +4942,7 @@ async function renderContinueWatchingRow(items, kind = 'tv', seq = dashLoadSeq) 
             <div class="poster-card" data-tmdb-id="${item.tmdb_id}" data-media-type="${item.media_type}">
                 <div class="poster-img-wrap">
                     <img src="${posterUrl}" alt="${escapeHtml(item.title)}" loading="lazy" data-img-fallback="dim">
+                    ${newBadge(item)}
                 </div>
                 ${item.media_type === 'tv' ? `<div class="continue-watching-progress">
                     <div class="continue-watching-bar"><div class="continue-watching-fill" style="width:${pct}%"></div></div>
@@ -4929,7 +5028,28 @@ function sortEntries(items, criterion) {
     return sorted;
 }
 
-function renderPosterGrid(container, items, sortCriterion) {
+// The Dropped shelf's button. Shows, books and games go back to Watching /
+// Reading / Playing — their diary entry was left open when dropped, so it
+// simply carries on. Movies have no "Watching", so they go back to Up Next.
+const pickUpLabel = (item) => (item.media_type === 'movie' ? 'Back to Up Next' : 'Pick up again');
+async function pickUpAgain(item) {
+    const verb = item.media_type === 'book' ? 'Reading' : item.media_type === 'game' ? 'Playing' : 'Watching';
+    try {
+        if (item.media_type === 'movie') {
+            await upsertEntryAndInvalidate(item.media_id, { status: 'planned', queued_at: new Date().toISOString(), queued_via: 'manual' });
+            showToast(`"${item.title}" is back in Up Next`);
+        } else {
+            await upsertEntryAndInvalidate(item.media_id, { status: 'in_progress' });
+            showToast(`Back to ${verb}: "${item.title}"`);
+        }
+        profileAllEntries = await getAllEntriesCached();
+        renderProfileTab(profileActiveTab);
+    } catch (err) {
+        showToast(`Couldn't update: ${ipcErrorText(err)}`, true);
+    }
+}
+
+function renderPosterGrid(container, items, sortCriterion, { cardAction = null } = {}) {
     if (items.length === 0) { container.innerHTML = ''; return; }
     container.innerHTML = items.map((item) => {
         const posterUrl = item.poster_url || (item.poster_path ? `${imgSrc(item.poster_path)}` : '');
@@ -4948,8 +5068,10 @@ function renderPosterGrid(container, items, sortCriterion) {
             <div class="poster-card" data-tmdb-id="${item.tmdb_id}" data-media-type="${item.media_type}">
                 <div class="poster-img-wrap">
                     <img src="${posterUrl}" alt="${title}" loading="lazy" data-img-fallback="dim">
+                    ${newBadge(item)}
                     ${dateBadge}
                     ${sortCriterion === 'queue' ? '<button type="button" class="queue-remove-btn" title="Remove from queue">&#10005;</button>' : ''}
+                    ${cardAction === 'pickup' ? `<button type="button" class="pickup-btn">${pickUpLabel(item)}</button>` : ''}
                     <div class="film-card-overlay">
                         <div class="film-card-title">${title}${item.release_date ? ` (${item.release_date.slice(0, 4)})` : ''}</div>
                     </div>
@@ -4969,6 +5091,15 @@ function renderPosterGrid(container, items, sortCriterion) {
                     showToast(`Removed "${items[i].title}" from your queue`);
                     loadDashboard();
                 } catch (err) { showToast(`Couldn't remove: ${err.message}`, true); }
+            });
+        });
+    }
+    if (cardAction === 'pickup') {
+        container.querySelectorAll('.pickup-btn').forEach((btn, i) => {
+            btn.addEventListener('click', (e) => {
+                e.stopPropagation(); // the card itself opens the title
+                btn.disabled = true;
+                pickUpAgain(items[i]);
             });
         });
     }
@@ -5116,6 +5247,7 @@ document.addEventListener('keydown', (e) => {
 // ==================== FULL-PAGE MEDIA DETAILS ====================
 
 async function openDetails(tmdbId, mediaType, { recordHistory = true } = {}) {
+    clearNewTitle(mediaType, tmdbId); // seen it: the "NEW!" tag has done its job
     if (recordHistory) pushNav(currentView);
     currentView = { type: 'detail', tmdbId, mediaType };
     showPage('detail');
@@ -6514,6 +6646,8 @@ async function setupEpisodes(details, entryRef, numberedSeasons, onEntryCreated,
         && finishedOn && details.last_aired_date && details.last_aired_date > finishedOn) {
         try {
             entryRef.current = await upsertEntryAndInvalidate(details.mediaId, { status: 'in_progress' });
+            // Continuing the same watch-through, not a rewatch (see reopenLastViewing).
+            await window.api.reopenLastViewing(entryRef.current.id).catch((err) => console.error('reopen diary entry:', err));
             onEntryCreated?.();
             showToast('New episodes available — moved back to Watching');
         } catch (err) {

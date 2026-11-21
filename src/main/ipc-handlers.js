@@ -305,6 +305,7 @@ function registerHandlers() {
     ipcMain.handle('diary:add', withSession((s, a) => sb.addEntryLog(s, a), null));
     ipcMain.handle('diary:delete', withSession((s, a) => sb.deleteEntryLog(s, a.logId), null));
     ipcMain.handle('diary:all', withSession((s) => sb.listAllEntryLogs(s), []));
+    ipcMain.handle('diary:reopenLast', withSession((s, a) => sb.reopenLastViewing(s, a.entryId), false));
     ipcMain.handle('statusEvents:list', withSession((s, a) => sb.listStatusEvents(s, a.entryId ?? null), []));
     ipcMain.handle('statusEvents:redate', async (_evt, { eventId, happenedAt }) => sb.redateStatusEvent(await requireSession(), eventId, happenedAt));
     ipcMain.handle('statusEvents:delete', async (_evt, { eventId }) => sb.deleteStatusEvent(await requireSession(), eventId));
@@ -961,7 +962,9 @@ function registerHandlers() {
                     if (show.status === 'completed' && liveCount != null && watchedIds.length < liveCount
                         && finishedOn && counts.last_aired_date && counts.last_aired_date > finishedOn) {
                         await sb.upsertEntry(session, show.mediaId, { status: 'in_progress' });
-                        updated.push({ title: show.title, newEpisodeCount: liveCount - watchedIds.length });
+                        // New episodes continue the watch-through you'd finished — not a rewatch.
+                        await sb.reopenLastViewing(session, show.entryId).catch((err) => console.error('reopen diary entry:', err.message));
+                        updated.push({ title: show.title, tmdbId: show.tmdbId, newEpisodeCount: liveCount - watchedIds.length });
                     }
                 } catch (err) {
                     console.error(`Failed to check new episodes for "${show.title}":`, err);

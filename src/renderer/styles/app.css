@@ -465,6 +465,14 @@ select { display: none; } /* native selects fully replaced by .custom-select com
    own corner radius) — the actual color + notch shape live on ::before,
    clipped inside it, so the poster's rounded corner stays visible instead
    of getting squared off by the ribbon's corner. */
+/* "NEW!" — tilted tag in the poster's top-right corner (new episodes, a watchlist movie just out, a new sequel) */
+.new-badge {
+    position: absolute; top: 10px; right: 6px; z-index: 2; pointer-events: none;
+    transform: rotate(12deg); padding: 0.25rem 0.8rem; border-radius: 6px;
+    background: rgba(20, 20, 22, 0.88); color: #f2f2f2;
+    font-size: 1.25rem; font-weight: 800; letter-spacing: 0.06em;
+    box-shadow: 0 0 10px rgba(255, 255, 255, 0.35), 0 2px 6px rgba(0, 0, 0, 0.35);
+}
 .status-flag {
     position: absolute; top: 0; left: 0; width: 22px; height: 34px; pointer-events: none;
     overflow: hidden; border-top-left-radius: 10px;
@@ -1269,6 +1277,12 @@ select { display: none; } /* native selects fully replaced by .custom-select com
 .list-detail-summary-side { display: flex; flex-direction: column; align-items: stretch; gap: 1rem; flex-shrink: 0; margin-left: auto; width: 240px; }
 .list-detail-summary-side > * { align-self: flex-end; }
 .list-detail-summary-side .list-owner-actions-box { align-self: stretch; }
+/* No description: float the side box so the posters start right away beside it
+   (the poster grid sits next to the float rather than under an empty row). */
+.list-detail-summary-row.no-description { display: block; margin-bottom: 0; }
+.list-detail-summary-row.no-description .list-detail-summary-side { float: right; margin: 0 0 2rem 2.4rem; }
+.list-detail-summary-row.no-description + #listManageBox { overflow: hidden; } /* sits beside the float, never under it */
+#listDetailPager, #listComments { clear: both; } /* a short list: comments start below the side box, not around it */
 
 /* ---- Owner actions: a stacked rectangle, Letterboxd mobile-style — "Edit
    or delete this list…" opens a small menu in place, "Share" sits as its
@@ -1433,6 +1447,15 @@ select { display: none; } /* native selects fully replaced by .custom-select com
     background: rgba(0,0,0,0.6); color: #fff; cursor: pointer; opacity: 0; transition: opacity 0.15s; z-index: 3; }
 .poster-card:hover .queue-remove-btn { opacity: 1; }
 .queue-remove-btn:hover { background: var(--accent); }
+/* Dropped shelf: always visible, top of the poster (the date bar owns the bottom) */
+.pickup-btn {
+    position: absolute; top: 10px; left: 10px; right: 10px; z-index: 3;
+    padding: 0.6rem 0.8rem; border: none; border-radius: 999px; cursor: pointer;
+    background: var(--accent); color: #fff; font: inherit; font-size: 1.15rem; font-weight: 700;
+    box-shadow: 0 2px 8px rgba(0, 0, 0, 0.3);
+}
+.pickup-btn:hover { filter: brightness(1.08); }
+.pickup-btn:disabled { opacity: 0.6; cursor: default; }
 
 /* Profile tab headings (Films / Diary / …) sit on the same line */
 .profile-tab-section .poster-row-header h3 { margin-bottom: 0; }

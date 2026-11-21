@@ -856,6 +856,34 @@ async function deleteStatusEvent(session, eventId) {
 }
 
 // All episode diary rows (RLS limits these to your own entries).
+// A finished show that gets new episodes goes back to Watching, and the
+// database then opens a new entry for it as if it were a rewatch. It isn't:
+// you're continuing the same watch-through. So the last finished entry is
+// reopened (no finish date) and the rewatch the database opened is removed.
+// Does nothing when the show has no finished entry.
+async function reopenLastViewing(session, entryId) {
+    requireUserId(session);
+    const c = getClient();
+    const { data: logs, error } = await c.from('entry_logs').select('id, watched_on, started_on, is_rewatch')
+        .eq('entry_id', entryId).is('episode_id', null).order('id', { ascending: true });
+    if (error) throw error;
+    const closed = (logs || []).filter((l) => l.watched_on).sort((a, b) => a.watched_on.localeCompare(b.watched_on));
+    const last = closed[closed.length - 1];
+    if (!last) return false;
+    const opened = (logs || []).filter((l) => !l.watched_on && l.started_on);
+    let start = last.started_on;
+    if (!start) {
+        const { data: entry } = await c.from('entries').select('date_started').eq('id', entryId).maybeSingle();
+        start = entry?.date_started || last.watched_on; // an open entry needs a start date
+    }
+    // Add the reopened entry first, so a failure part-way never loses the viewing.
+    const { error: insErr } = await c.from('entry_logs').insert({ entry_id: entryId, watched_on: null, started_on: start, is_rewatch: last.is_rewatch });
+    if (insErr) throw insErr;
+    const { error: delErr } = await c.from('entry_logs').delete().in('id', [last.id, ...opened.map((l) => l.id)]);
+    if (delErr) throw delErr;
+    return true;
+}
+
 // entryId narrows it to one show (its activity timeline).
 async function listEpisodeLogs(session, entryId = null) {
     requireUserId(session);
@@ -2038,7 +2066,7 @@ async function listListShares(listId) {
 module.exports = {
     getEntryLogCounts,
     followStudio, unfollowStudio, isFollowingStudio, listFollowedStudios,
-    listEntryLogs, addEntryLog, deleteEntryLog, listAllEntryLogs,
+    listEntryLogs, addEntryLog, deleteEntryLog, listAllEntryLogs, reopenLastViewing,
     listStatusEvents, redateStatusEvent, deleteStatusEvent,
     getActivityExtras,
     getTvWatchLog,

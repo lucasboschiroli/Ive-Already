@@ -61,6 +61,7 @@ contextBridge.exposeInMainWorld('api', {
     addEntryLog: (log) => ipcRenderer.invoke('diary:add', log),
     deleteEntryLog: (logId) => ipcRenderer.invoke('diary:delete', { logId }),
     listAllEntryLogs: () => ipcRenderer.invoke('diary:all'),
+    reopenLastViewing: (entryId) => ipcRenderer.invoke('diary:reopenLast', { entryId }),
     listStatusEvents: (entryId) => ipcRenderer.invoke('statusEvents:list', { entryId }),
     redateStatusEvent: (eventId, happenedAt) => ipcRenderer.invoke('statusEvents:redate', { eventId, happenedAt }),
     deleteStatusEvent: (eventId) => ipcRenderer.invoke('statusEvents:delete', { eventId }),
